@@ -1,6 +1,19 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import { api, exportUrl } from '../api';
 import { formatDate } from '../utils/formatDate';
+import { FiDownload, FiFileText, FiChevronDown, FiUser } from 'react-icons/fi';
+
+const EXCEL_EXPORTS = [
+  { label: 'Members', path: '/export/members' },
+  { label: 'Contributions', path: '/export/contributions' },
+  { label: 'Loans', path: '/export/loans' },
+  { label: 'Repayments', path: '/export/repayments' },
+  { label: 'External Funds', path: '/export/external-funds' },
+  { label: 'Expenses', path: '/export/expenses' },
+  { label: 'Registration Fees', path: '/export/registration-fees' },
+  { label: 'Fines', path: '/export/fines' },
+  { label: 'Monthly Summary', path: '/export/monthly-summary' }
+];
 
 export default function Reports() {
   const [members, setMembers] = useState([]);
@@ -8,6 +21,8 @@ export default function Reports() {
   const [memberStatement, setMemberStatement] = useState(null);
   const [groupReport, setGroupReport] = useState(null);
   const [loading, setLoading] = useState(false);
+  const [exportDropdownOpen, setExportDropdownOpen] = useState(false);
+  const dropdownRef = useRef(null);
   const [fullReportFilter, setFullReportFilter] = useState({
     period: 'all',
     date: new Date().toISOString().slice(0, 10),
@@ -18,6 +33,12 @@ export default function Reports() {
   useEffect(() => {
     api.members.list().then(setMembers);
     api.reports.groupFinancial().then(setGroupReport).catch(console.error);
+  }, []);
+
+  useEffect(() => {
+    const fn = (e) => { if (dropdownRef.current && !dropdownRef.current.contains(e.target)) setExportDropdownOpen(false); };
+    document.addEventListener('click', fn);
+    return () => document.removeEventListener('click', fn);
   }, []);
 
   const loadStatement = (id) => {
@@ -37,31 +58,40 @@ export default function Reports() {
   };
 
   return (
-    <div>
+    <div className="reports-page">
       <div className="page-header">
         <h1 className="page-title">Reports</h1>
-        <div className="page-actions" style={{ display: 'flex', flexWrap: 'wrap', gap: '0.5rem' }}>
-          <a href={exportUrl('/export/members')} className="btn btn-secondary" target="_blank" rel="noreferrer">Members</a>
-          <a href={exportUrl('/export/contributions')} className="btn btn-secondary" target="_blank" rel="noreferrer">Contributions</a>
-          <a href={exportUrl('/export/loans')} className="btn btn-secondary" target="_blank" rel="noreferrer">Loans</a>
-          <a href={exportUrl('/export/repayments')} className="btn btn-secondary" target="_blank" rel="noreferrer">Repayments</a>
-          <a href={exportUrl('/export/external-funds')} className="btn btn-secondary" target="_blank" rel="noreferrer">External Funds</a>
-          <a href={exportUrl('/export/expenses')} className="btn btn-secondary" target="_blank" rel="noreferrer">Expenses</a>
-          <a href={exportUrl('/export/registration-fees')} className="btn btn-secondary" target="_blank" rel="noreferrer">Reg. Fees</a>
-          <a href={exportUrl('/export/fines')} className="btn btn-secondary" target="_blank" rel="noreferrer">Fines</a>
-          <a href={exportUrl('/export/monthly-summary')} className="btn btn-secondary" target="_blank" rel="noreferrer">Monthly Summary</a>
+      </div>
+
+      <div className="reports-quick-bar">
+        <a href={exportUrl('/export/financial-report-pdf')} className="reports-quick-btn reports-quick-primary" target="_blank" rel="noreferrer">
+          <FiDownload size={18} /> Download PDF Report
+        </a>
+        <div className="reports-dropdown" ref={dropdownRef}>
+          <button
+            type="button"
+            className="reports-quick-btn reports-quick-secondary"
+            onClick={() => setExportDropdownOpen(!exportDropdownOpen)}
+            aria-expanded={exportDropdownOpen}
+          >
+            Individual Excel <FiChevronDown size={16} style={{ opacity: exportDropdownOpen ? 1 : 0.7 }} />
+          </button>
+          {exportDropdownOpen && (
+            <div className="reports-dropdown-menu">
+              {EXCEL_EXPORTS.map(({ label, path }) => (
+                <a key={path} href={exportUrl(path)} target="_blank" rel="noreferrer" className="reports-dropdown-item">
+                  {label}
+                </a>
+              ))}
+            </div>
+          )}
         </div>
       </div>
 
-      <div className="card">
-        <div className="card-header">
-          <h3 className="card-title">Full Report (Filter & Download)</h3>
-        </div>
-        <p style={{ color: 'var(--text-muted)', fontSize: '0.9rem', marginBottom: '1rem' }}>
-          Download a complete Excel workbook: Members, Contributions, Loans, Repayments, External Funds, Expenses, Reg. Fees, Fines, Monthly Summary, and Member Summary.
-        </p>
-        <div style={{ display: 'flex', flexWrap: 'wrap', gap: '1rem', alignItems: 'flex-end', marginBottom: '1rem' }}>
-          <div className="form-group" style={{ marginBottom: 0 }}>
+      <div className="reports-full-card">
+        <h3 className="reports-full-title">Full Excel Report</h3>
+        <div className="reports-full-filters">
+          <div className="form-group" style={{ marginBottom: 0, minWidth: 120 }}>
             <label>Period</label>
             <select value={fullReportFilter.period} onChange={e => setFullReportFilter(f => ({ ...f, period: e.target.value }))}>
               <option value="all">All time</option>
@@ -72,14 +102,14 @@ export default function Reports() {
             </select>
           </div>
           {(fullReportFilter.period === 'day' || fullReportFilter.period === 'week') && (
-            <div className="form-group" style={{ marginBottom: 0 }}>
+            <div className="form-group" style={{ marginBottom: 0, minWidth: 140 }}>
               <label>Date</label>
               <input type="date" value={fullReportFilter.date} onChange={e => setFullReportFilter(f => ({ ...f, date: e.target.value }))} />
             </div>
           )}
           {(fullReportFilter.period === 'month' || fullReportFilter.period === 'year') && (
             <>
-              <div className="form-group" style={{ marginBottom: 0 }}>
+              <div className="form-group" style={{ marginBottom: 0, minWidth: 130 }}>
                 <label>Month</label>
                 <select value={fullReportFilter.month} onChange={e => setFullReportFilter(f => ({ ...f, month: +e.target.value }))}>
                   {[1,2,3,4,5,6,7,8,9,10,11,12].map(m => (
@@ -87,7 +117,7 @@ export default function Reports() {
                   ))}
                 </select>
               </div>
-              <div className="form-group" style={{ marginBottom: 0 }}>
+              <div className="form-group" style={{ marginBottom: 0, minWidth: 90 }}>
                 <label>Year</label>
                 <select value={fullReportFilter.year} onChange={e => setFullReportFilter(f => ({ ...f, year: +e.target.value }))}>
                   {Array.from({ length: 10 }, (_, i) => new Date().getFullYear() - i).map(y => (
@@ -97,95 +127,96 @@ export default function Reports() {
               </div>
             </>
           )}
-          <a href={api.exportFullReportUrl(fullReportParams())} className="btn btn-primary" target="_blank" rel="noreferrer">
-            Download Full Report
+          <a href={api.exportFullReportUrl(fullReportParams())} className="reports-quick-btn reports-quick-secondary" target="_blank" rel="noreferrer" style={{ alignSelf: 'flex-end' }}>
+            <FiFileText size={18} /> Download Full Report
           </a>
         </div>
+        <p className="reports-full-hint">Complete workbook: Members, Contributions, Loans, Repayments, External Funds, Expenses, Reg. Fees, Fines, Monthly Summary, Member Summary.</p>
       </div>
 
-      <div className="card">
-        <div className="card-header">
-          <h3 className="card-title">Export to Excel</h3>
-        </div>
-        <p style={{ color: 'var(--text-muted)', fontSize: '0.9rem', marginBottom: '1rem' }}>Download individual reports in Excel format. Includes Members (with reg. fee status), Contributions, Loans, Repayments, External Funds, Expenses, Reg. Fees, Fines, and Monthly Summary.</p>
-      </div>
-
-      <div className="card">
-        <div className="card-header">
-          <h3 className="card-title">Member Statement</h3>
-        </div>
-        <div className="form-group" style={{ maxWidth: 300 }}>
-          <label>Select Member</label>
-          <select value={selectedMember || ''} onChange={e => loadStatement(e.target.value)}>
-            <option value="">Choose member</option>
-            {members.map(m => <option key={m.id} value={m.id}>{m.full_name}</option>)}
-          </select>
-        </div>
-        {selectedMember && (
-          <div style={{ marginTop: '1rem' }}>
-            <a href={exportUrl(`/export/member-statement/${selectedMember}`)} className="btn btn-primary" target="_blank" rel="noreferrer">Export Statement</a>
+      <div className="reports-grid">
+        <div className="card reports-card">
+          <div className="reports-card-header">
+            <h3 className="card-title">Group Financial Report</h3>
+            <a href={exportUrl('/export/financial-report-pdf')} className="btn btn-primary btn-sm" target="_blank" rel="noreferrer">
+              <FiDownload size={14} /> PDF
+            </a>
           </div>
-        )}
-        {loading && <div className="loading" style={{ padding: '1rem' }}><span className="loading-spinner" />Loading...</div>}
-        {memberStatement && !loading && (
-          <div style={{ marginTop: '1.5rem', padding: '1.25rem', background: 'var(--bg-secondary)', borderRadius: 'var(--radius-sm)', border: '1px solid var(--border)' }}>
-            <h4 style={{ marginBottom: '1rem', fontSize: '1rem' }}>{memberStatement.member?.full_name}</h4>
-            <div style={{ display: 'grid', gap: '0.5rem', marginBottom: '1rem' }}>
-              <p style={{ margin: 0 }}>Total Contributions: <strong>{memberStatement.totalContributions?.toLocaleString()}</strong></p>
-              <p style={{ margin: 0 }}>Reg. Fee Paid: <strong>{memberStatement.totalRegFee?.toLocaleString() || 0}</strong></p>
-              <p style={{ margin: 0 }}>Fines Paid: <strong>{memberStatement.finesPaid?.toLocaleString() || 0}</strong></p>
-              <p style={{ margin: 0 }}>Fines Unpaid: <strong>{memberStatement.finesUnpaid?.toLocaleString() || 0}</strong></p>
-              <p style={{ margin: 0 }}>Outstanding Balance: <strong>{memberStatement.totalOutstandingBalance?.toLocaleString()}</strong></p>
-              <p style={{ margin: 0 }}>Net Position: <strong>{memberStatement.netPosition?.toLocaleString()}</strong></p>
-            </div>
-            <div>
-              <strong style={{ fontSize: '0.9rem', color: 'var(--text-secondary)' }}>Recent Contributions</strong>
-              <div className="table-wrapper" style={{ marginTop: '0.5rem' }}>
-                <table>
-                  <thead><tr><th>Date</th><th>Month</th><th>Year</th><th>Amount</th></tr></thead>
-                  <tbody>
-                    {memberStatement.contributions?.slice(0, 10).map(c => (
-                      <tr key={c.id}><td>{formatDate(c.contribution_date)}</td><td>{c.month}</td><td>{c.year}</td><td>{parseFloat(c.amount).toLocaleString()}</td></tr>
-                    ))}
-                  </tbody>
-                </table>
+          {groupReport && (
+            <div className="reports-card-body">
+              <div className="reports-stats-grid">
+                <div className="reports-stat"><span className="reports-stat-label">Total Loans Issued</span><span className="reports-stat-value">{groupReport.totalLoansIssued}</span></div>
+                <div className="reports-stat"><span className="reports-stat-label">Total Loan Amount</span><span className="reports-stat-value">{groupReport.totalLoanAmount?.toLocaleString()}</span></div>
+                <div className="reports-stat"><span className="reports-stat-label">Interest Earned</span><span className="reports-stat-value">{groupReport.totalInterestEarned?.toLocaleString()}</span></div>
+                <div className="reports-stat"><span className="reports-stat-label">External Funds</span><span className="reports-stat-value">{groupReport.totalExternalFunds?.toLocaleString()}</span></div>
+                <div className="reports-stat"><span className="reports-stat-label">Registration Fees</span><span className="reports-stat-value">{groupReport.totalRegFees?.toLocaleString()}</span></div>
+                <div className="reports-stat"><span className="reports-stat-label">Fines (Paid)</span><span className="reports-stat-value">{groupReport.totalFinesPaid?.toLocaleString()}</span></div>
+                <div className="reports-stat"><span className="reports-stat-label">Expenses</span><span className="reports-stat-value">{groupReport.totalExpenses?.toLocaleString()}</span></div>
+                <div className="reports-stat"><span className="reports-stat-label">Defaulted Loans</span><span className="reports-stat-value">{groupReport.defaultedLoans?.length || 0}</span></div>
+              </div>
+              <div className="reports-table-section">
+                <strong className="reports-table-title">Monthly Contributions</strong>
+                <div className="table-wrapper">
+                  <table>
+                    <thead><tr><th>Month</th><th>Year</th><th>Total</th></tr></thead>
+                    <tbody>
+                      {groupReport.monthlyContributions?.slice(0, 12).map((c, i) => (
+                        <tr key={i}><td>{c.month}</td><td>{c.year}</td><td>{parseFloat(c.total).toLocaleString()}</td></tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
               </div>
             </div>
-          </div>
-        )}
-      </div>
-
-      <div className="card">
-        <div className="card-header">
-          <h3 className="card-title">Group Financial Report</h3>
+          )}
         </div>
-        {groupReport && (
-          <div>
-            <div style={{ display: 'grid', gap: '0.5rem', marginBottom: '1rem' }}>
-              <p style={{ margin: 0 }}>Total Loans Issued: <strong>{groupReport.totalLoansIssued}</strong></p>
-              <p style={{ margin: 0 }}>Total Loan Amount: <strong>{groupReport.totalLoanAmount?.toLocaleString()}</strong></p>
-              <p style={{ margin: 0 }}>Total Interest Earned: <strong>{groupReport.totalInterestEarned?.toLocaleString()}</strong></p>
-              <p style={{ margin: 0 }}>External Funds: <strong>{groupReport.totalExternalFunds?.toLocaleString()}</strong></p>
-              <p style={{ margin: 0 }}>Registration Fees: <strong>{groupReport.totalRegFees?.toLocaleString()}</strong></p>
-              <p style={{ margin: 0 }}>Fines (Paid): <strong>{groupReport.totalFinesPaid?.toLocaleString()}</strong></p>
-              <p style={{ margin: 0 }}>Expenses: <strong>{groupReport.totalExpenses?.toLocaleString()}</strong></p>
-              <p style={{ margin: 0 }}>Defaulted Loans: <strong>{groupReport.defaultedLoans?.length || 0}</strong></p>
-            </div>
-            <div>
-              <strong style={{ fontSize: '0.9rem', color: 'var(--text-secondary)' }}>Monthly Contributions</strong>
-              <div className="table-wrapper" style={{ marginTop: '0.5rem' }}>
-                <table>
-                  <thead><tr><th>Month</th><th>Year</th><th>Total</th></tr></thead>
-                  <tbody>
-                    {groupReport.monthlyContributions?.slice(0, 12).map((c, i) => (
-                      <tr key={i}><td>{c.month}</td><td>{c.year}</td><td>{parseFloat(c.total).toLocaleString()}</td></tr>
-                    ))}
-                  </tbody>
-                </table>
+
+        <div className="card reports-card">
+          <div className="reports-card-header">
+            <h3 className="card-title">Member Statement</h3>
+          </div>
+          <div className="form-group" style={{ marginBottom: '1rem' }}>
+            <label>Select Member</label>
+            <select value={selectedMember || ''} onChange={e => loadStatement(e.target.value)}>
+              <option value="">Choose member</option>
+              {members.map(m => <option key={m.id} value={m.id}>{m.full_name}</option>)}
+            </select>
+          </div>
+          {selectedMember && (
+            <a href={exportUrl(`/export/member-statement/${selectedMember}`)} className="btn btn-secondary btn-sm" style={{ marginBottom: '1rem' }} target="_blank" rel="noreferrer">
+              <FiDownload size={14} /> Export Statement
+            </a>
+          )}
+          {loading && <div className="loading" style={{ padding: '1rem' }}><span className="loading-spinner" />Loading...</div>}
+          {memberStatement && !loading && (
+            <div className="reports-member-detail">
+              <div className="reports-member-header">
+                <FiUser size={20} />
+                <h4>{memberStatement.member?.full_name}</h4>
+              </div>
+              <div className="reports-member-stats">
+                <div className="reports-stat"><span className="reports-stat-label">Contributions</span><span className="reports-stat-value">{memberStatement.totalContributions?.toLocaleString()}</span></div>
+                <div className="reports-stat"><span className="reports-stat-label">Reg. Fee</span><span className="reports-stat-value">{memberStatement.totalRegFee?.toLocaleString() || 0}</span></div>
+                <div className="reports-stat"><span className="reports-stat-label">Fines Paid</span><span className="reports-stat-value">{memberStatement.finesPaid?.toLocaleString() || 0}</span></div>
+                <div className="reports-stat"><span className="reports-stat-label">Outstanding</span><span className="reports-stat-value">{memberStatement.totalOutstandingBalance?.toLocaleString()}</span></div>
+                <div className="reports-stat reports-stat-highlight"><span className="reports-stat-label">Net Position</span><span className="reports-stat-value">{memberStatement.netPosition?.toLocaleString()}</span></div>
+              </div>
+              <div className="reports-table-section">
+                <strong className="reports-table-title">Recent Contributions</strong>
+                <div className="table-wrapper">
+                  <table>
+                    <thead><tr><th>Date</th><th>Month</th><th>Year</th><th>Amount</th></tr></thead>
+                    <tbody>
+                      {memberStatement.contributions?.slice(0, 10).map(c => (
+                        <tr key={c.id}><td>{formatDate(c.contribution_date)}</td><td>{c.month}</td><td>{c.year}</td><td>{parseFloat(c.amount).toLocaleString()}</td></tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
               </div>
             </div>
-          </div>
-        )}
+          )}
+        </div>
       </div>
     </div>
   );

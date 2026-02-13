@@ -1,5 +1,6 @@
 import express from 'express';
 import ExcelJS from 'exceljs';
+import PDFDocument from 'pdfkit';
 import pool from '../db/connection.js';
 import { authenticate } from '../middleware/auth.js';
 
@@ -9,6 +10,143 @@ function getExportDate() {
   const d = new Date();
   return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
 }
+
+function drawTable(doc, x, y, columns, rows, title = null) {
+  const colCount = columns.length;
+  const rowHeight = 24;
+  const margin = 50;
+  const pageWidth = doc.page.width - margin * 2;
+  const colWidth = pageWidth / colCount;
+  const tableWidth = colWidth * colCount;
+  const headerBg = '#2c3e50';
+  const rowBgAlt = '#f1f5f9';
+  const borderColor = '#cbd5e1';
+
+  let startY = y;
+
+  if (title) {
+    doc.fontSize(12).font('Helvetica-Bold').fillColor('#1e293b').text(title, x, startY);
+    startY += 30;
+  }
+
+  const tableStartY = startY;
+  doc.rect(x, startY, tableWidth, rowHeight).fill(headerBg);
+  doc.fillColor('#ffffff').fontSize(10).font('Helvetica-Bold');
+  columns.forEach((col, i) => {
+    doc.text(col.label, x + i * colWidth + 10, startY + 7, { width: colWidth - 20, align: col.align || 'left' });
+  });
+  startY += rowHeight;
+
+  rows.forEach((row, rowIndex) => {
+    const bg = rowIndex % 2 === 0 ? '#ffffff' : rowBgAlt;
+    doc.rect(x, startY, tableWidth, rowHeight).fill(bg);
+    doc.fillColor('#334155').fontSize(9).font('Helvetica');
+    columns.forEach((col, i) => {
+      const val = row[col.key];
+      doc.text(String(val ?? ''), x + i * colWidth + 10, startY + 7, { width: colWidth - 20, align: col.align || 'left' });
+    });
+    startY += rowHeight;
+  });
+
+  doc.strokeColor(borderColor).lineWidth(0.5);
+  doc.rect(x, tableStartY, tableWidth, startY - tableStartY).stroke();
+  for (let i = 1; i < colCount; i++) {
+    doc.moveTo(x + i * colWidth, tableStartY).lineTo(x + i * colWidth, startY).stroke();
+  }
+  for (let r = 1; r <= rows.length; r++) {
+    doc.moveTo(x, tableStartY + rowHeight * r).lineTo(x + tableWidth, tableStartY + rowHeight * r).stroke();
+  }
+  return startY + 24;
+}
+
+router.get('/financial-report-pdf', authenticate, async (req, res) => {
+  try {
+    const [monthlyContrib] = await pool.query(`
+      SELECT month, year, SUM(amount) as total FROM contributions GROUP BY month, year ORDER BY year DESC, month DESC LIMIT 12
+    `);
+    const [loansIssued] = await pool.query('SELECT COUNT(*) as count, COALESCE(SUM(total_amount), 0) as total, COALESCE(SUM(interest_amount), 0) as interest FROM loans');
+    const [defaulted] = await pool.query("SELECT * FROM loans WHERE status = 'Defaulted'");
+    const [[extTotal]] = await pool.query('SELECT COALESCE(SUM(amount), 0) as t FROM external_funds');
+    const [[expTotal]] = await pool.query('SELECT COALESCE(SUM(amount), 0) as t FROM expenses');
+    const [[regTotal]] = await pool.query('SELECT COALESCE(SUM(amount), 0) as t FROM registration_fees');
+    const [[finesTotal]] = await pool.query("SELECT COALESCE(SUM(amount), 0) as t FROM fines WHERE status = 'Paid'");
+    const [[contribTotal]] = await pool.query('SELECT COALESCE(SUM(amount), 0) as t FROM contributions');
+    const [[repayTotal]] = await pool.query('SELECT COALESCE(SUM(amount_paid), 0) as t FROM repayments');
+
+    const totalLoans = loansIssued[0].count;
+    const totalLoanAmt = parseFloat(loansIssued[0].total);
+    const totalInterest = parseFloat(loansIssued[0].interest);
+    const ext = parseFloat(extTotal?.t || 0);
+    const exp = parseFloat(expTotal?.t || 0);
+    const reg = parseFloat(regTotal?.t || 0);
+    const fines = parseFloat(finesTotal?.t || 0);
+    const contrib = parseFloat(contribTotal?.t || 0);
+    const repay = parseFloat(repayTotal?.t || 0);
+    const defaultedCount = defaulted.length;
+
+    const summaryRows = [
+      { metric: 'Total Contributions', value: contrib.toLocaleString() },
+      { metric: 'Total Loans Issued', value: String(totalLoans) },
+      { metric: 'Total Loan Amount', value: totalLoanAmt.toLocaleString() },
+      { metric: 'Total Interest Earned', value: totalInterest.toLocaleString() },
+      { metric: 'Total Repayments', value: repay.toLocaleString() },
+      { metric: 'External Funds', value: ext.toLocaleString() },
+      { metric: 'Registration Fees', value: reg.toLocaleString() },
+      { metric: 'Fines (Paid)', value: fines.toLocaleString() },
+      { metric: 'Expenses', value: exp.toLocaleString() },
+      { metric: 'Defaulted Loans', value: String(defaultedCount) }
+    ];
+
+    const monthNames = ['', 'Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
+    const monthlyRows = monthlyContrib.map(c => ({
+      month: monthNames[c.month] || c.month,
+      year: String(c.year),
+      total: parseFloat(c.total || 0).toLocaleString()
+    }));
+
+    res.setHeader('Content-Type', 'application/pdf');
+    res.setHeader('Content-Disposition', `attachment; filename=financial-report-${getExportDate()}.pdf`);
+
+    const doc = new PDFDocument({ margin: 50, size: 'A4' });
+    doc.pipe(res);
+
+    const margin = 50;
+    const pageWidth = doc.page.width - margin * 2;
+    let y = 40;
+
+    doc.rect(0, 0, doc.page.width, 85).fill('#1a365d');
+    doc.fillColor('#ffffff').fontSize(22).font('Helvetica-Bold');
+    doc.text('A Generated Financial Report', margin, 28, { width: pageWidth, align: 'center' });
+    doc.fontSize(11).font('Helvetica');
+    doc.text('Table Banking - Financial Summary', margin, 52, { width: pageWidth, align: 'center' });
+    doc.text(`Generated on ${new Date().toLocaleDateString('en-GB', { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' })}`, margin, 68, { width: pageWidth, align: 'center' });
+
+    y = 110;
+
+    const summaryCols = [
+      { key: 'metric', label: 'Metric', align: 'left' },
+      { key: 'value', label: 'Amount / Count', align: 'right' }
+    ];
+    y = drawTable(doc, margin, y, summaryCols, summaryRows, 'Financial Summary');
+
+    const monthlyCols = [
+      { key: 'month', label: 'Month', align: 'left' },
+      { key: 'year', label: 'Year', align: 'center' },
+      { key: 'total', label: 'Total (KES)', align: 'right' }
+    ];
+    y = drawTable(doc, margin, y, monthlyCols, monthlyRows, 'Monthly Contributions');
+
+    y += 15;
+    doc.rect(margin, y, pageWidth, 45).fill('#f0f4f8').stroke('#cbd5e0');
+    doc.fillColor('#475569').fontSize(9).font('Helvetica');
+    doc.text('This is a generated financial report. Data is current as of the date above.', margin + 12, y + 15, { width: pageWidth - 24 });
+    doc.text('For official records, please verify with your system administrator.', margin + 12, y + 30, { width: pageWidth - 24 });
+
+    doc.end();
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
 
 async function createWorkbook() {
   return new ExcelJS.Workbook();
