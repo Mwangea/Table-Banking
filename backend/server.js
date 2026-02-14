@@ -26,23 +26,41 @@ if (process.env.NODE_ENV === 'production' && !process.env.JWT_SECRET) {
   process.exit(1);
 }
 
-const app = express();
-app.use(helmet({ contentSecurityPolicy: false }));
-const corsOrigins = process.env.CORS_ORIGIN
+const ALLOWED_ORIGINS = process.env.CORS_ORIGIN
   ? process.env.CORS_ORIGIN.split(',').map((o) => o.trim()).filter(Boolean)
-  : true;
+  : ['https://finance.hotsportgym.com', 'http://localhost:3000', 'http://localhost:5173'];
+
+const app = express();
+app.use((req, res, next) => {
+  const origin = req.headers.origin;
+  const allow = !origin || ALLOWED_ORIGINS.includes(origin);
+  if (allow) {
+    if (origin) res.setHeader('Access-Control-Allow-Origin', origin);
+    else res.setHeader('Access-Control-Allow-Origin', ALLOWED_ORIGINS[0] || '*');
+    res.setHeader('Access-Control-Allow-Credentials', 'true');
+    res.setHeader('Access-Control-Allow-Methods', 'GET, POST, PUT, DELETE, PATCH, OPTIONS');
+    res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization, Accept');
+    res.setHeader('Access-Control-Max-Age', '86400');
+  }
+  if (req.method === 'OPTIONS') return res.status(204).end();
+  next();
+});
+app.use(helmet({ contentSecurityPolicy: false }));
 app.use(cors({
-  origin: corsOrigins === true ? true : (origin, cb) => {
-    if (!origin || corsOrigins.includes(origin)) cb(null, true);
+  origin: ALLOWED_ORIGINS.length ? (origin, cb) => {
+    if (!origin || ALLOWED_ORIGINS.includes(origin)) cb(null, true);
     else cb(null, false);
-  },
+  } : true,
   credentials: true,
-  methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
-  allowedHeaders: ['Content-Type', 'Authorization']
+  methods: ['GET', 'POST', 'PUT', 'DELETE', 'PATCH', 'OPTIONS'],
+  allowedHeaders: ['Content-Type', 'Authorization', 'Accept'],
+  optionsSuccessStatus: 200,
+  preflightContinue: false
 }));
 app.use(express.json());
 
 const apiProtect = (req, res, next) => {
+  if (req.method === 'OPTIONS') return next();
   const path = (req.baseUrl || '') + (req.path || '');
   if (req.method === 'POST' && (path === '/api/auth/login' || path.endsWith('/auth/login'))) return next();
   return authenticate(req, res, next);

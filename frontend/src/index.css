@@ -212,6 +212,7 @@ input, select, textarea { font: inherit; }
   border-color: var(--accent);
 }
 .form-group input::placeholder { color: var(--text-muted); }
+.form-hint { display: block; margin-top: 0.35rem; font-size: 0.8rem; color: var(--text-muted); }
 
 /* SearchableSelect */
 .searchable-select { position: relative; width: 100%; }

@@ -77,7 +77,7 @@ export default function Loans() {
 
   const openAdd = () => {
     const d = new Date();
-    setForm({ member_id: '', loan_amount: '', interest_rate: settings.default_interest_rate || '10', issue_date: d.toISOString().slice(0, 10), due_date: '' });
+    setForm({ member_id: '', loan_amount: '', interest_rate: '10', issue_date: d.toISOString().slice(0, 10), due_date: '' });
     setModal('add');
     api.dashboard().then(d => setAvailableCash(d.availableCashInGroup ?? 0)).catch(() => setAvailableCash(null));
   };
@@ -87,7 +87,7 @@ export default function Loans() {
       id: l.id,
       member_id: l.member_id,
       loan_amount: l.loan_amount,
-      interest_rate: l.interest_rate,
+      interest_rate: '10',
       issue_date: (l.issue_date || '').toString().slice(0, 10),
       due_date: (l.due_date || '').toString().slice(0, 10)
     });
@@ -309,7 +309,8 @@ export default function Loans() {
               </div>
               <div className="form-group">
                 <label>Interest Rate (%)</label>
-                <input type="number" step="0.01" value={form.interest_rate} onChange={e => setForm({ ...form, interest_rate: e.target.value })} />
+                <input type="number" value="10" readOnly disabled />
+                <span className="form-hint">10% per annum on reducing balance</span>
               </div>
               <div className="form-group">
                 <label>Issue Date</label>

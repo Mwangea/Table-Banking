@@ -44,10 +44,11 @@ router.get('/:id', authenticate, async (req, res) => {
 
 router.post('/', authenticate, requireAdmin, async (req, res) => {
   try {
-    const { member_id, loan_amount, interest_rate, issue_date, due_date } = req.body;
-    if (!member_id || !loan_amount || !interest_rate || !issue_date || !due_date) {
-      return res.status(400).json({ error: 'member_id, loan_amount, interest_rate, issue_date, due_date are required' });
+    const { member_id, loan_amount, issue_date, due_date } = req.body;
+    if (!member_id || !loan_amount || !issue_date || !due_date) {
+      return res.status(400).json({ error: 'member_id, loan_amount, issue_date, due_date are required' });
     }
+    const interest_rate = 10; // 10% per annum on reducing balance (fixed)
     const [member] = await pool.query('SELECT status FROM members WHERE id = ?', [member_id]);
     if (member.length === 0) return res.status(404).json({ error: 'Member not found' });
     if (member[0].status !== 'Active') return res.status(400).json({ error: 'Member must be Active to apply for loan' });
@@ -130,10 +131,11 @@ router.put('/:id/status', authenticate, requireAdmin, async (req, res) => {
 
 router.put('/:id', authenticate, requireAdmin, async (req, res) => {
   try {
-    const { member_id, loan_amount, interest_rate, issue_date, due_date } = req.body;
-    if (!member_id || !loan_amount || !interest_rate || !issue_date || !due_date) {
-      return res.status(400).json({ error: 'member_id, loan_amount, interest_rate, issue_date, due_date are required' });
+    const { member_id, loan_amount, issue_date, due_date } = req.body;
+    if (!member_id || !loan_amount || !issue_date || !due_date) {
+      return res.status(400).json({ error: 'member_id, loan_amount, issue_date, due_date are required' });
     }
+    const interest_rate = 10; // 10% per annum on reducing balance (fixed)
     const [existing] = await pool.query('SELECT * FROM loans WHERE id = ?', [req.params.id]);
     if (existing.length === 0) return res.status(404).json({ error: 'Loan not found' });
     if (existing[0].status === 'Completed') {
