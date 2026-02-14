@@ -3,6 +3,7 @@ import ExcelJS from 'exceljs';
 import PDFDocument from 'pdfkit';
 import pool from '../db/connection.js';
 import { authenticate } from '../middleware/auth.js';
+import { calculateReducingBalance } from '../utils/reducingBalance.js';
 
 const router = express.Router();
 
@@ -59,12 +60,30 @@ function drawTable(doc, x, y, columns, rows, title = null) {
   return startY + 24;
 }
 
+async function getLoanTotals() {
+  const [allLoans] = await pool.query('SELECT * FROM loans');
+  const [allRepayments] = await pool.query('SELECT loan_id, amount_paid, payment_date FROM repayments');
+  const repayByLoan = {};
+  for (const r of allRepayments) {
+    if (!repayByLoan[r.loan_id]) repayByLoan[r.loan_id] = [];
+    repayByLoan[r.loan_id].push({ amount_paid: r.amount_paid, payment_date: r.payment_date });
+  }
+  let totalAmount = 0;
+  let totalInterest = 0;
+  for (const loan of allLoans) {
+    const calc = calculateReducingBalance(loan, repayByLoan[loan.id] || []);
+    totalAmount += calc.total_amount;
+    totalInterest += calc.total_interest;
+  }
+  return { count: allLoans.length, totalAmount, totalInterest };
+}
+
 router.get('/financial-report-pdf', authenticate, async (req, res) => {
   try {
     const [monthlyContrib] = await pool.query(`
       SELECT month, year, SUM(amount) as total FROM contributions GROUP BY month, year ORDER BY year DESC, month DESC LIMIT 12
     `);
-    const [loansIssued] = await pool.query('SELECT COUNT(*) as count, COALESCE(SUM(total_amount), 0) as total, COALESCE(SUM(interest_amount), 0) as interest FROM loans');
+    const loanTotals = await getLoanTotals();
     const [defaulted] = await pool.query("SELECT * FROM loans WHERE status = 'Defaulted'");
     const [[extTotal]] = await pool.query('SELECT COALESCE(SUM(amount), 0) as t FROM external_funds');
     const [[expTotal]] = await pool.query('SELECT COALESCE(SUM(amount), 0) as t FROM expenses');
@@ -73,9 +92,9 @@ router.get('/financial-report-pdf', authenticate, async (req, res) => {
     const [[contribTotal]] = await pool.query('SELECT COALESCE(SUM(amount), 0) as t FROM contributions');
     const [[repayTotal]] = await pool.query('SELECT COALESCE(SUM(amount_paid), 0) as t FROM repayments');
 
-    const totalLoans = loansIssued[0].count;
-    const totalLoanAmt = parseFloat(loansIssued[0].total);
-    const totalInterest = parseFloat(loansIssued[0].interest);
+    const totalLoans = loanTotals.count;
+    const totalLoanAmt = loanTotals.totalAmount;
+    const totalInterest = loanTotals.totalInterest;
     const ext = parseFloat(extTotal?.t || 0);
     const exp = parseFloat(expTotal?.t || 0);
     const reg = parseFloat(regTotal?.t || 0);
@@ -210,14 +229,16 @@ router.get('/contributions', authenticate, async (req, res) => {
 router.get('/loans', authenticate, async (req, res) => {
   try {
     const [rows] = await pool.query(`
-      SELECT l.id, l.member_id, m.full_name as member_name, l.loan_amount, l.interest_rate, l.interest_amount, l.total_amount, 
-        COALESCE(r.total_paid, 0) as total_paid, 
-        (l.total_amount - COALESCE(r.total_paid, 0)) as balance, l.status
-      FROM loans l 
-      JOIN members m ON l.member_id = m.id 
-      LEFT JOIN (SELECT loan_id, SUM(amount_paid) as total_paid FROM repayments GROUP BY loan_id) r ON l.id = r.loan_id
+      SELECT l.*, m.full_name as member_name
+      FROM loans l JOIN members m ON l.member_id = m.id 
       ORDER BY l.issue_date DESC
     `);
+    const [allRepayments] = await pool.query('SELECT loan_id, amount_paid, payment_date FROM repayments');
+    const repayByLoan = {};
+    for (const r of allRepayments) {
+      if (!repayByLoan[r.loan_id]) repayByLoan[r.loan_id] = [];
+      repayByLoan[r.loan_id].push({ amount_paid: r.amount_paid, payment_date: r.payment_date });
+    }
     const wb = await createWorkbook();
     const ws = wb.addWorksheet('Loans');
     ws.columns = [
@@ -232,15 +253,18 @@ router.get('/loans', authenticate, async (req, res) => {
     const contribMap = {};
     const [contrib] = await pool.query('SELECT member_id, SUM(amount) as total FROM contributions GROUP BY member_id');
     contrib.forEach(c => { contribMap[c.member_id] = parseFloat(c.total); });
-    const data = rows.map(r => ({
-      member_name: r.member_name,
-      total_contributions: contribMap[r.member_id] || 0,
-      loan_amount: parseFloat(r.loan_amount),
-      interest_amount: parseFloat(r.interest_amount),
-      total_amount: parseFloat(r.total_amount),
-      total_paid: parseFloat(r.total_paid),
-      balance: parseFloat(r.balance)
-    }));
+    const data = rows.map(r => {
+      const calc = calculateReducingBalance(r, repayByLoan[r.id] || []);
+      return {
+        member_name: r.member_name,
+        total_contributions: contribMap[r.member_id] || 0,
+        loan_amount: parseFloat(r.loan_amount),
+        interest_amount: calc.total_interest,
+        total_amount: calc.total_amount,
+        total_paid: calc.total_paid,
+        balance: calc.balance
+      };
+    });
     ws.addRows(data);
     ws.getRow(1).font = { bold: true };
     res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
@@ -369,7 +393,23 @@ router.get('/fines', authenticate, async (req, res) => {
 router.get('/monthly-summary', authenticate, async (req, res) => {
   try {
     const [contrib] = await pool.query('SELECT month, year, SUM(amount) as total FROM contributions GROUP BY month, year ORDER BY year, month');
-    const [loans] = await pool.query('SELECT MONTH(issue_date) as month, YEAR(issue_date) as year, COUNT(*) as count, SUM(loan_amount) as principal, SUM(interest_amount) as interest FROM loans GROUP BY month, year ORDER BY year, month');
+    const [allLoans] = await pool.query('SELECT * FROM loans');
+    const [allRepayments] = await pool.query('SELECT loan_id, amount_paid, payment_date FROM repayments');
+    const repayByLoan = {};
+    for (const r of allRepayments) {
+      if (!repayByLoan[r.loan_id]) repayByLoan[r.loan_id] = [];
+      repayByLoan[r.loan_id].push({ amount_paid: r.amount_paid, payment_date: r.payment_date });
+    }
+    const loansMap = {};
+    for (const l of allLoans) {
+      const d = new Date(l.issue_date);
+      const k = `${d.getFullYear()}-${d.getMonth() + 1}`;
+      const calc = calculateReducingBalance(l, repayByLoan[l.id] || []);
+      if (!loansMap[k]) loansMap[k] = { count: 0, principal: 0, interest: 0 };
+      loansMap[k].count++;
+      loansMap[k].principal += parseFloat(l.loan_amount);
+      loansMap[k].interest += calc.total_interest;
+    }
     const [repay] = await pool.query('SELECT MONTH(payment_date) as month, YEAR(payment_date) as year, SUM(amount_paid) as total FROM repayments GROUP BY month, year ORDER BY year, month');
     const wb = await createWorkbook();
     const ws = wb.addWorksheet('Monthly Summary');
@@ -387,6 +427,7 @@ router.get('/monthly-summary', authenticate, async (req, res) => {
     const loansMap = {};
     loans.forEach(l => { loansMap[`${l.year}-${l.month}`] = { count: l.count, principal: parseFloat(l.principal), interest: parseFloat(l.interest) }; });
     const repayMap = {};
+    const [repay] = await pool.query('SELECT MONTH(payment_date) as month, YEAR(payment_date) as year, SUM(amount_paid) as total FROM repayments GROUP BY month, year ORDER BY year, month');
     repay.forEach(r => { repayMap[`${r.year}-${r.month}`] = parseFloat(r.total); });
     const keys = new Set([...Object.keys(contribMap), ...Object.keys(loansMap), ...Object.keys(repayMap)]);
     const data = [...keys].sort().map(k => {
@@ -480,11 +521,8 @@ router.get('/full-report', authenticate, async (req, res) => {
       FROM contributions c JOIN members m ON c.member_id = m.id 
       ${dateWhereContrib}
       ORDER BY c.contribution_date DESC`;
-    const loanSql = `SELECT l.id, l.member_id, m.full_name as member_name, l.loan_amount, l.interest_rate, l.interest_amount, l.total_amount, l.issue_date,
-        COALESCE(r.total_paid, 0) as total_paid, 
-        (l.total_amount - COALESCE(r.total_paid, 0)) as balance, l.status
+    const loanSql = `SELECT l.*, m.full_name as member_name
       FROM loans l JOIN members m ON l.member_id = m.id 
-      LEFT JOIN (SELECT loan_id, SUM(amount_paid) as total_paid FROM repayments GROUP BY loan_id) r ON l.id = r.loan_id
       ${dateWhereLoan}
       ORDER BY l.issue_date DESC`;
     const repaySql = `SELECT r.id, r.loan_id, l.member_id, m.full_name as member_name, r.amount_paid, r.payment_date 
@@ -493,8 +531,19 @@ router.get('/full-report', authenticate, async (req, res) => {
       ORDER BY r.payment_date DESC`;
 
     const [contributions] = dateParams.length ? await pool.query(contribSql, dateParams) : await pool.query(contribSql);
-    const [loans] = dateParams.length ? await pool.query(loanSql, dateParams) : await pool.query(loanSql);
+    const [loansRaw] = dateParams.length ? await pool.query(loanSql, dateParams) : await pool.query(loanSql);
     const [repayments] = dateParams.length ? await pool.query(repaySql, dateParams) : await pool.query(repaySql);
+
+    const [allRepayments] = await pool.query('SELECT loan_id, amount_paid, payment_date FROM repayments');
+    const repayByLoan = {};
+    for (const r of allRepayments) {
+      if (!repayByLoan[r.loan_id]) repayByLoan[r.loan_id] = [];
+      repayByLoan[r.loan_id].push({ amount_paid: r.amount_paid, payment_date: r.payment_date });
+    }
+    const loans = loansRaw.map(l => {
+      const calc = calculateReducingBalance(l, repayByLoan[l.id] || []);
+      return { ...l, interest_amount: calc.total_interest, total_amount: calc.total_amount, total_paid: calc.total_paid, balance: calc.balance };
+    });
 
     const wb = await createWorkbook();
 
@@ -719,12 +768,15 @@ router.get('/member-statement/:memberId', authenticate, async (req, res) => {
     if (member.length === 0) return res.status(404).json({ error: 'Member not found' });
 
     const [contributions] = await pool.query('SELECT * FROM contributions WHERE member_id = ? ORDER BY contribution_date', [memberId]);
-    const [loans] = await pool.query('SELECT * FROM loans WHERE member_id = ? ORDER BY issue_date', [memberId]);
+    const [loansRaw] = await pool.query('SELECT * FROM loans WHERE member_id = ? ORDER BY issue_date', [memberId]);
     const contribTotal = contributions.reduce((s, c) => s + parseFloat(c.amount), 0);
     let outBalance = 0;
-    for (const l of loans) {
-      const [rep] = await pool.query('SELECT COALESCE(SUM(amount_paid), 0) as total FROM repayments WHERE loan_id = ?', [l.id]);
-      outBalance += parseFloat(l.total_amount) - parseFloat(rep[0].total);
+    const loans = [];
+    for (const l of loansRaw) {
+      const [rep] = await pool.query('SELECT amount_paid, payment_date FROM repayments WHERE loan_id = ? ORDER BY payment_date', [l.id]);
+      const calc = calculateReducingBalance(l, rep);
+      outBalance += calc.balance;
+      loans.push({ ...l, interest_amount: calc.total_interest, total_amount: calc.total_amount });
     }
 
     const wb = await createWorkbook();

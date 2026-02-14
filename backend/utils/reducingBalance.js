@@ -1,64 +1,87 @@
 /**
- * Reducing balance interest: 10% per annum on outstanding balance.
- * Interest accrues daily: balance × (rate/100) × (days/365)
- * When repayments are made, they first cover accrued interest, then reduce principal.
+ * 10% monthly reducing balance interest for 3-month loan term.
+ * Principal divided equally across 3 months.
+ * Interest calculated each month on remaining principal.
  */
+
+const LOAN_TERM_MONTHS = 3;
+const MONTHLY_INTEREST_RATE = 0.10;
 
 function parseDate(d) {
   if (typeof d === 'string') return new Date(d + 'T00:00:00');
   return d instanceof Date ? d : new Date(d);
 }
 
-function daysBetween(start, end) {
-  return Math.max(0, Math.round((parseDate(end) - parseDate(start)) / (24 * 60 * 60 * 1000)));
+function addMonths(date, months) {
+  const d = new Date(date);
+  d.setMonth(d.getMonth() + months);
+  return d;
+}
+
+function formatDateYMD(d) {
+  return d.toISOString().slice(0, 10);
+}
+
+function round2(n) {
+  return Math.round(n * 100) / 100;
 }
 
 /**
- * Calculate loan totals using reducing balance.
- * @param {Object} loan - { loan_amount, interest_rate, issue_date }
- * @param {Array} repayments - [{ amount_paid, payment_date }] sorted by payment_date asc
- * @param {string} [asOfDate] - optional; default is last payment date or today
- * @returns {Object} { total_interest, total_amount, balance, total_paid }
+ * Generate monthly breakdown for a loan.
+ * @param {number} principal - Loan amount
+ * @param {string|Date} issueDate - Loan start date
+ * @returns {Array} [{ month, opening_balance, interest, principal_paid, total_installment, closing_balance, due_date }]
  */
-export function calculateReducingBalance(loan, repayments = [], asOfDate = null) {
-  const principal = parseFloat(loan.loan_amount);
-  const annualRate = parseFloat(loan.interest_rate || 0) / 100;
-  const issueDate = parseDate(loan.issue_date);
+export function generateMonthlySchedule(principal, issueDate) {
+  const issue = parseDate(issueDate);
+  const schedule = [];
+  let openingBalance = round2(principal);
+  const monthlyPrincipal = round2(principal / LOAN_TERM_MONTHS);
 
-  const sortedRepayments = [...repayments]
-    .filter(r => parseFloat(r.amount_paid || 0) > 0)
-    .sort((a, b) => parseDate(a.payment_date) - parseDate(b.payment_date));
+  for (let month = 1; month <= LOAN_TERM_MONTHS; month++) {
+    const interest = round2(openingBalance * MONTHLY_INTEREST_RATE);
+    const principalPaid = month === LOAN_TERM_MONTHS
+      ? round2(openingBalance)
+      : monthlyPrincipal;
+    const totalInstallment = round2(interest + principalPaid);
+    const closingBalance = round2(openingBalance - principalPaid);
 
-  let balance = principal;
-  let totalInterest = 0;
-  let lastDate = issueDate;
+    schedule.push({
+      month,
+      opening_balance: openingBalance,
+      interest,
+      principal_paid: principalPaid,
+      total_installment: totalInstallment,
+      closing_balance: closingBalance >= 0 ? closingBalance : 0,
+      due_date: formatDateYMD(addMonths(issue, month))
+    });
 
-  for (const r of sortedRepayments) {
-    const paymentDate = parseDate(r.payment_date);
-    const amount = parseFloat(r.amount_paid || 0);
-    const days = daysBetween(lastDate, paymentDate);
-
-    const interestAccrued = balance * annualRate * (days / 365);
-    totalInterest += interestAccrued;
-    balance += interestAccrued;
-
-    balance -= amount;
-    if (balance < 0) balance = 0;
-    lastDate = paymentDate;
+    openingBalance = closingBalance >= 0 ? closingBalance : 0;
   }
 
-  const endDate = asOfDate ? parseDate(asOfDate) : new Date();
-  const daysToNow = daysBetween(lastDate, endDate);
-  const interestToDate = balance * annualRate * (daysToNow / 365);
-  totalInterest += interestToDate;
-  balance += interestToDate;
+  return schedule;
+}
 
-  const totalPaid = sortedRepayments.reduce((sum, r) => sum + parseFloat(r.amount_paid || 0), 0);
+/**
+ * Calculate loan totals using 10% monthly reducing balance (3 months, equal principal).
+ * @param {Object} loan - { loan_amount, interest_rate, issue_date }
+ * @param {Array} repayments - [{ amount_paid, payment_date }]
+ * @returns {Object} { total_interest, total_amount, balance, total_paid, schedule }
+ */
+export function calculateReducingBalance(loan, repayments = []) {
+  const principal = parseFloat(loan.loan_amount);
+  const schedule = generateMonthlySchedule(principal, loan.issue_date);
+
+  const totalInterest = round2(schedule.reduce((s, row) => s + row.interest, 0));
+  const totalAmount = round2(principal + totalInterest);
+  const totalPaid = repayments.reduce((s, r) => s + parseFloat(r.amount_paid || 0), 0);
+  const balance = Math.max(0, round2(totalAmount - totalPaid));
 
   return {
-    total_interest: Math.round(totalInterest * 100) / 100,
-    total_amount: Math.round((principal + totalInterest) * 100) / 100,
-    balance: Math.max(0, Math.round(balance * 100) / 100),
-    total_paid: totalPaid
+    total_interest: totalInterest,
+    total_amount: totalAmount,
+    balance,
+    total_paid: round2(totalPaid),
+    schedule
   };
 }

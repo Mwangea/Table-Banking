@@ -33,6 +33,7 @@ export const api = {
   loans: {
     list: (params) => request('/loans' + (params ? '?' + new URLSearchParams(params).toString() : '')),
     get: (id) => request(`/loans/${id}`),
+    schedulePreview: (loanAmount, issueDate) => request(`/loans/schedule-preview?loan_amount=${encodeURIComponent(loanAmount)}&issue_date=${encodeURIComponent(issueDate)}`),
     create: (body) => request('/loans', { method: 'POST', body: JSON.stringify(body) }),
     update: (id, body) => request(`/loans/${id}`, { method: 'PUT', body: JSON.stringify(body) }),
     updateStatus: (id, status) => request(`/loans/${id}/status`, { method: 'PUT', body: JSON.stringify({ status }) }),

@@ -1,9 +1,24 @@
 import express from 'express';
 import pool from '../db/connection.js';
 import { authenticate, requireAdmin } from '../middleware/auth.js';
-import { calculateReducingBalance } from '../utils/reducingBalance.js';
+import { calculateReducingBalance, generateMonthlySchedule } from '../utils/reducingBalance.js';
 
 const router = express.Router();
+
+router.get('/schedule-preview', authenticate, (req, res) => {
+  try {
+    const loanAmount = parseFloat(req.query.loan_amount);
+    const issueDate = req.query.issue_date;
+    if (!loanAmount || loanAmount <= 0 || !issueDate) {
+      return res.status(400).json({ error: 'loan_amount and issue_date required' });
+    }
+    const schedule = generateMonthlySchedule(loanAmount, issueDate);
+    const totalInterest = schedule.reduce((s, r) => s + r.interest, 0);
+    res.json({ schedule, total_interest: totalInterest, total_amount: loanAmount + totalInterest });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
 
 router.get('/', authenticate, async (req, res) => {
   try {
@@ -18,7 +33,7 @@ router.get('/', authenticate, async (req, res) => {
     const loansWithBalance = await Promise.all(rows.map(async (loan) => {
       const [reps] = await pool.query('SELECT amount_paid, payment_date FROM repayments WHERE loan_id = ? ORDER BY payment_date', [loan.id]);
       const calc = calculateReducingBalance(loan, reps);
-      return { ...loan, interest_amount: calc.total_interest, total_amount: calc.total_amount, total_paid: calc.total_paid, balance: calc.balance };
+      return { ...loan, interest_amount: calc.total_interest, total_amount: calc.total_amount, total_paid: calc.total_paid, balance: calc.balance, schedule: calc.schedule };
     }));
     res.json(loansWithBalance);
   } catch (err) {
@@ -35,7 +50,7 @@ router.get('/:id', authenticate, async (req, res) => {
     if (loans.length === 0) return res.status(404).json({ error: 'Loan not found' });
     const [reps] = await pool.query('SELECT amount_paid, payment_date FROM repayments WHERE loan_id = ? ORDER BY payment_date', [req.params.id]);
     const calc = calculateReducingBalance(loans[0], reps);
-    const loan = { ...loans[0], interest_amount: calc.total_interest, total_amount: calc.total_amount, total_paid: calc.total_paid, balance: calc.balance };
+    const loan = { ...loans[0], interest_amount: calc.total_interest, total_amount: calc.total_amount, total_paid: calc.total_paid, balance: calc.balance, schedule: calc.schedule };
     res.json(loan);
   } catch (err) {
     res.status(500).json({ error: err.message });
@@ -80,7 +95,7 @@ router.post('/', authenticate, requireAdmin, async (req, res) => {
       outstandingBalance += calc.balance;
     }
     const poolTotal = totalContributions + totalRepaid + totalExternal + totalRegFees + totalFinesPaid - totalPrincipalLent - totalExpenses;
-    const availableCash = poolTotal - outstandingBalance;
+    const availableCash = poolTotal;
 
     const [memberContrib] = await pool.query('SELECT COALESCE(SUM(amount), 0) as total FROM contributions WHERE member_id = ?', [member_id]);
     const memberTotalContrib = parseFloat(memberContrib[0].total);
@@ -94,21 +109,26 @@ router.post('/', authenticate, requireAdmin, async (req, res) => {
       return res.status(400).json({ error: `Insufficient group funds. Available cash: ${availableCash.toFixed(2)}. The group can only lend from pooled contributions minus outstanding loans.` });
     }
 
-    // Reducing balance: interest on outstanding balance. Interest accrued dynamically as repayments reduce balance.
+    const scheduleCalc = calculateReducingBalance({ loan_amount: loanAmount, issue_date }, []);
+    const interestAmount = scheduleCalc.total_interest;
+    const totalAmount = scheduleCalc.total_amount;
+
     const [result] = await pool.query(
       'INSERT INTO loans (member_id, loan_amount, interest_rate, interest_amount, total_amount, issue_date, due_date, status, approved_by) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)',
-      [member_id, loanAmount, interest_rate, 0, loanAmount, issue_date, due_date, 'Ongoing', req.user.id]
+      [member_id, loanAmount, interest_rate, interestAmount, totalAmount, issue_date, due_date, 'Ongoing', req.user.id]
     );
+    const scheduleCalc2 = calculateReducingBalance({ loan_amount: loanAmount, issue_date }, []);
     res.status(201).json({
       id: result.insertId,
       member_id,
       loan_amount: loanAmount,
       interest_rate,
-      interest_amount: 0,
-      total_amount: loanAmount,
+      interest_amount: interestAmount,
+      total_amount: totalAmount,
       issue_date,
       due_date,
-      status: 'Ongoing'
+      status: 'Ongoing',
+      schedule: scheduleCalc2.schedule
     });
   } catch (err) {
     res.status(500).json({ error: err.message });
@@ -146,7 +166,10 @@ router.put('/:id', authenticate, requireAdmin, async (req, res) => {
     const loanAmount = parseFloat(loan_amount);
     const updatedLoan = { ...existing[0], loan_amount: loanAmount, interest_rate: parseFloat(interest_rate), issue_date };
     const [reps] = await pool.query('SELECT amount_paid, payment_date FROM repayments WHERE loan_id = ? ORDER BY payment_date', [req.params.id]);
-    const putCalc = calculateReducingBalance(updatedLoan, reps);
+    const putCalc = calculateReducingBalance(
+      { ...updatedLoan, loan_amount: loanAmount, issue_date },
+      reps
+    );
     if (putCalc.balance < 0) {
       return res.status(400).json({ error: `Amount already repaid (${putCalc.total_paid.toFixed(2)}) exceeds new loan total` });
     }
@@ -160,7 +183,7 @@ router.put('/:id', authenticate, requireAdmin, async (req, res) => {
     );
     const [reps2] = await pool.query('SELECT amount_paid, payment_date FROM repayments WHERE loan_id = ? ORDER BY payment_date', [req.params.id]);
     const getCalc = calculateReducingBalance(loans[0], reps2);
-    const row = { ...loans[0], interest_amount: getCalc.total_interest, total_amount: getCalc.total_amount, total_paid: getCalc.total_paid, balance: getCalc.balance };
+    const row = { ...loans[0], interest_amount: getCalc.total_interest, total_amount: getCalc.total_amount, total_paid: getCalc.total_paid, balance: getCalc.balance, schedule: getCalc.schedule };
     res.json(row);
   } catch (err) {
     res.status(500).json({ error: err.message });

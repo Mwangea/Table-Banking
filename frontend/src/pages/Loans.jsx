@@ -51,6 +51,7 @@ export default function Loans() {
   const [errorModal, setErrorModal] = useState(null);
   const [deleteTarget, setDeleteTarget] = useState(null);
   const [deleting, setDeleting] = useState(false);
+  const [schedulePreview, setSchedulePreview] = useState(null);
   const user = JSON.parse(localStorage.getItem('user') || '{}');
   const isAdmin = user.role === 'admin';
 
@@ -70,6 +71,22 @@ export default function Loans() {
   };
   useEffect(() => { load(); }, []);
 
+  useEffect(() => {
+    if (!modal || !form.loan_amount || !form.issue_date) return setSchedulePreview(null);
+    const amt = parseFloat(form.loan_amount);
+    if (isNaN(amt) || amt <= 0) return setSchedulePreview(null);
+    if (modal === 'edit' && form.id) {
+      const loan = loans.find(l => l.id === form.id);
+      if (loan?.schedule && loan.loan_amount == amt && (loan.issue_date || '').slice(0, 10) === form.issue_date) {
+        setSchedulePreview({ schedule: loan.schedule });
+        return;
+      }
+    }
+    api.loans.schedulePreview(amt, form.issue_date)
+      .then(setSchedulePreview)
+      .catch(() => setSchedulePreview(null));
+  }, [modal, form.loan_amount, form.issue_date, form.id, loans]);
+
   const filtered = filterLoans(loans, search);
   const totalPages = Math.max(1, Math.ceil(filtered.length / PAGE_SIZE));
   const paginated = filtered.slice((page - 1) * PAGE_SIZE, page * PAGE_SIZE);
@@ -79,6 +96,7 @@ export default function Loans() {
     const d = new Date();
     setForm({ member_id: '', loan_amount: '', interest_rate: '10', issue_date: d.toISOString().slice(0, 10), due_date: '' });
     setModal('add');
+    setSchedulePreview(null);
     api.dashboard().then(d => setAvailableCash(d.availableCashInGroup ?? 0)).catch(() => setAvailableCash(null));
   };
 
@@ -93,6 +111,7 @@ export default function Loans() {
     });
     setModal('edit');
     setAvailableCash(null);
+    setSchedulePreview(l.schedule ? { schedule: l.schedule } : null);
   };
 
   const openDelete = (l) => setDeleteTarget(l);
@@ -310,7 +329,7 @@ export default function Loans() {
               <div className="form-group">
                 <label>Interest Rate (%)</label>
                 <input type="number" value="10" readOnly disabled />
-                <span className="form-hint">10% per annum on reducing balance</span>
+                <span className="form-hint">10% monthly reducing balance, 3-month term, equal principal</span>
               </div>
               <div className="form-group">
                 <label>Issue Date</label>
@@ -320,6 +339,48 @@ export default function Loans() {
                 <label>Due Date</label>
                 <input type="date" value={form.due_date} onChange={e => setForm({ ...form, due_date: e.target.value })} required />
               </div>
+              {schedulePreview?.schedule?.length > 0 && (
+                <div className="form-group" style={{ marginTop: '1rem' }}>
+                  <label>Monthly Breakdown</label>
+                  <div className="table-wrapper" style={{ overflowX: 'auto', marginTop: '0.5rem' }}>
+                    <table style={{ fontSize: '0.85rem' }}>
+                      <thead>
+                        <tr>
+                          <th>Month</th>
+                          <th>Due Date</th>
+                          <th>Opening Balance</th>
+                          <th>Interest</th>
+                          <th>Principal</th>
+                          <th>Installment</th>
+                          <th>Closing Balance</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {schedulePreview.schedule.map(row => (
+                          <tr key={row.month}>
+                            <td>{row.month}</td>
+                            <td>{row.due_date}</td>
+                            <td>{parseFloat(row.opening_balance).toLocaleString()}</td>
+                            <td>{parseFloat(row.interest).toLocaleString()}</td>
+                            <td>{parseFloat(row.principal_paid).toLocaleString()}</td>
+                            <td>{parseFloat(row.total_installment).toLocaleString()}</td>
+                            <td>{parseFloat(row.closing_balance).toLocaleString()}</td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                  {schedulePreview.schedule?.length > 0 && (() => {
+                    const totalInt = schedulePreview.total_interest ?? schedulePreview.schedule.reduce((s, r) => s + parseFloat(r.interest || 0), 0);
+                    const totalAmt = schedulePreview.total_amount ?? (parseFloat(form.loan_amount || 0) + totalInt);
+                    return (
+                      <p style={{ marginTop: '0.5rem', color: 'var(--text-muted)', fontSize: '0.875rem' }}>
+                        Total interest: {totalInt.toLocaleString()} | Total repayable: {totalAmt.toLocaleString()}
+                      </p>
+                    );
+                  })()}
+                </div>
+              )}
               <div className="form-actions">
                 <button type="submit" className="btn btn-primary" disabled={saving}>
                   {saving && <span className="loading-spinner" />}{saving ? (form.id ? 'Saving...' : 'Creating...') : (form.id ? 'Save' : 'Create')}

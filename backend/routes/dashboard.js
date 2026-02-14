@@ -1,6 +1,7 @@
 import express from 'express';
 import pool from '../db/connection.js';
 import { authenticate } from '../middleware/auth.js';
+import { calculateReducingBalance } from '../utils/reducingBalance.js';
 
 const router = express.Router();
 
@@ -14,18 +15,26 @@ router.get('/', authenticate, async (req, res) => {
     const [[finesPaidTotal]] = await pool.query("SELECT COALESCE(SUM(amount), 0) as total FROM fines WHERE status = 'Paid'");
     const [[loans]] = await pool.query("SELECT COUNT(*) as count FROM loans WHERE status IN ('Ongoing', 'Pending')");
     const [[loaned]] = await pool.query('SELECT COALESCE(SUM(loan_amount), 0) as total FROM loans');
-    const [[interest]] = await pool.query('SELECT COALESCE(SUM(interest_amount), 0) as total FROM loans');
     const [[repaid]] = await pool.query('SELECT COALESCE(SUM(amount_paid), 0) as total FROM repayments');
-    const [[defaulted]] = await pool.query("SELECT COALESCE(SUM(total_amount), 0) - COALESCE((SELECT SUM(r.amount_paid) FROM repayments r WHERE r.loan_id IN (SELECT id FROM loans WHERE status = 'Defaulted')), 0) as total FROM loans WHERE status = ?", ['Defaulted']);
-    
-    const activeLoans = await pool.query(`
-      SELECT l.id, l.total_amount, COALESCE(SUM(r.amount_paid), 0) as paid 
-      FROM loans l LEFT JOIN repayments r ON l.id = r.loan_id 
-      WHERE l.status IN ('Ongoing', 'Pending', 'Defaulted') GROUP BY l.id
-    `);
+
+    const [allLoans] = await pool.query('SELECT * FROM loans');
+    const [allRepayments] = await pool.query('SELECT loan_id, amount_paid, payment_date FROM repayments');
+    const repayByLoan = {};
+    for (const r of allRepayments) {
+      if (!repayByLoan[r.loan_id]) repayByLoan[r.loan_id] = [];
+      repayByLoan[r.loan_id].push({ amount_paid: r.amount_paid, payment_date: r.payment_date });
+    }
+    let totalInterest = 0;
     let outstandingBalance = 0;
-    for (const row of activeLoans[0]) {
-      outstandingBalance += parseFloat(row.total_amount) - parseFloat(row.paid);
+    let totalDefaulted = 0;
+    for (const loan of allLoans) {
+      const reps = repayByLoan[loan.id] || [];
+      const calc = calculateReducingBalance(loan, reps);
+      totalInterest += calc.total_interest;
+      if (['Ongoing', 'Pending', 'Defaulted'].includes(loan.status)) {
+        outstandingBalance += calc.balance;
+      }
+      if (loan.status === 'Defaulted') totalDefaulted += calc.balance;
     }
 
     const totalContributions = parseFloat(contrib.total);
@@ -36,7 +45,7 @@ router.get('/', authenticate, async (req, res) => {
     const totalFinesPaid = parseFloat(finesPaidTotal.total);
     const totalPrincipalLent = parseFloat(loaned.total);
     const poolTotal = totalContributions + totalRepaid + totalExternalFunds + totalRegFees + totalFinesPaid - totalPrincipalLent - totalExpenses;
-    const availableCash = poolTotal - outstandingBalance;
+    const availableCash = poolTotal;
 
     const [recentContrib] = await pool.query(`
       SELECT c.id, c.amount, c.contribution_date, m.full_name as member_name 
@@ -48,20 +57,27 @@ router.get('/', authenticate, async (req, res) => {
       FROM repayments r JOIN loans l ON r.loan_id = l.id JOIN members m ON l.member_id = m.id 
       ORDER BY r.payment_date DESC, r.id DESC LIMIT 8
     `);
-    const [activeLoansList] = await pool.query(`
-      SELECT l.id, m.full_name as member_name, l.total_amount, 
-        COALESCE((SELECT SUM(amount_paid) FROM repayments WHERE loan_id = l.id), 0) as total_paid,
-        l.status
+    const [activeLoansRows] = await pool.query(`
+      SELECT l.*, m.full_name as member_name
       FROM loans l JOIN members m ON l.member_id = m.id 
       WHERE l.status IN ('Ongoing', 'Defaulted') 
       ORDER BY l.issue_date DESC LIMIT 5
     `);
-    const [defaultedList] = await pool.query(`
-      SELECT l.id, m.full_name as member_name, l.total_amount, 
-        COALESCE((SELECT SUM(amount_paid) FROM repayments WHERE loan_id = l.id), 0) as total_paid
+    const activeLoansList = activeLoansRows.map(l => {
+      const reps = repayByLoan[l.id] || [];
+      const calc = calculateReducingBalance(l, reps);
+      return { id: l.id, member_name: l.member_name, total_amount: calc.total_amount, total_paid: calc.total_paid, status: l.status, balance: calc.balance };
+    });
+    const [defaultedRows] = await pool.query(`
+      SELECT l.*, m.full_name as member_name
       FROM loans l JOIN members m ON l.member_id = m.id 
       WHERE l.status = 'Defaulted' LIMIT 5
     `);
+    const defaultedList = defaultedRows.map(l => {
+      const reps = repayByLoan[l.id] || [];
+      const calc = calculateReducingBalance(l, reps);
+      return { id: l.id, member_name: l.member_name, total_amount: calc.total_amount, total_paid: calc.total_paid, balance: calc.balance };
+    });
 
     const [recentExternal] = await pool.query('SELECT e.id, e.source, e.amount, e.received_date FROM external_funds e ORDER BY e.received_date DESC LIMIT 5');
     const [recentExpenses] = await pool.query('SELECT e.id, e.amount, e.expense_date, e.category FROM expenses e ORDER BY e.expense_date DESC LIMIT 5');
@@ -75,23 +91,16 @@ router.get('/', authenticate, async (req, res) => {
       totalFinesPaid,
       totalActiveLoans: loans.count,
       totalMoneyLoaned: parseFloat(loaned.total),
-      totalInterestEarned: parseFloat(interest.total),
+      totalInterestEarned: totalInterest,
       totalMoneyRepaid: totalRepaid,
       totalOutstandingBalance: outstandingBalance,
       availableCashInGroup: availableCash,
       poolTotal,
-      totalDefaulted: parseFloat(defaulted[0]?.total || 0),
+      totalDefaulted,
       recentContributions: recentContrib,
       recentRepayments: recentRepay,
-      activeLoans: activeLoansList.map(l => ({
-        ...l,
-        balance: parseFloat(l.total_amount) - parseFloat(l.total_paid),
-        total_paid: parseFloat(l.total_paid)
-      })),
-      defaultedLoans: defaultedList.map(l => ({
-        ...l,
-        balance: parseFloat(l.total_amount) - parseFloat(l.total_paid)
-      })),
+      activeLoans: activeLoansList,
+      defaultedLoans: defaultedList,
       recentExternalFunds: recentExternal,
       recentExpenses: recentExpenses
     });

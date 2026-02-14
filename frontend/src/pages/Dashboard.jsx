@@ -41,7 +41,7 @@ export default function Dashboard() {
           <div className="hero-content">
             <span className="hero-label">Available to Lend</span>
             <span className="hero-value">{availableCash.toLocaleString()}</span>
-            <span className="hero-sub">Pool {poolTotal.toLocaleString()} − Outstanding {outstanding.toLocaleString()}</span>
+            <span className="hero-sub">Contributions + Repayments + External + Reg + Fines − Principal Lent − Expenses</span>
           </div>
         </div>
       </section>
