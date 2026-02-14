@@ -28,7 +28,18 @@ if (process.env.NODE_ENV === 'production' && !process.env.JWT_SECRET) {
 
 const app = express();
 app.use(helmet({ contentSecurityPolicy: false }));
-app.use(cors({ origin: process.env.CORS_ORIGIN || true, credentials: true }));
+const corsOrigins = process.env.CORS_ORIGIN
+  ? process.env.CORS_ORIGIN.split(',').map((o) => o.trim()).filter(Boolean)
+  : true;
+app.use(cors({
+  origin: corsOrigins === true ? true : (origin, cb) => {
+    if (!origin || corsOrigins.includes(origin)) cb(null, true);
+    else cb(null, false);
+  },
+  credentials: true,
+  methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
+  allowedHeaders: ['Content-Type', 'Authorization']
+}));
 app.use(express.json());
 
 const apiProtect = (req, res, next) => {
