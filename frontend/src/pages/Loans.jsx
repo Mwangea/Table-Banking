@@ -1,9 +1,11 @@
 import { useState, useEffect } from 'react';
+import toast from 'react-hot-toast';
 import { api, exportUrl } from '../api';
 import { formatDate } from '../utils/formatDate';
 import AlertModal from '../components/AlertModal';
 import Pagination from '../components/Pagination';
 import SearchableSelect from '../components/SearchableSelect';
+import DeleteModal from '../components/DeleteModal';
 
 const CACHE_KEY = 'table_banking_loans';
 const PAGE_SIZE = 10;
@@ -47,6 +49,8 @@ export default function Loans() {
   const [saving, setSaving] = useState(false);
   const [availableCash, setAvailableCash] = useState(null);
   const [errorModal, setErrorModal] = useState(null);
+  const [deleteTarget, setDeleteTarget] = useState(null);
+  const [deleting, setDeleting] = useState(false);
   const user = JSON.parse(localStorage.getItem('user') || '{}');
   const isAdmin = user.role === 'admin';
 
@@ -74,15 +78,34 @@ export default function Loans() {
   const openAdd = () => {
     const d = new Date();
     setForm({ member_id: '', loan_amount: '', interest_rate: settings.default_interest_rate || '10', issue_date: d.toISOString().slice(0, 10), due_date: '' });
-    setModal(true);
+    setModal('add');
     api.dashboard().then(d => setAvailableCash(d.availableCashInGroup ?? 0)).catch(() => setAvailableCash(null));
   };
+
+  const openEdit = (l) => {
+    setForm({
+      id: l.id,
+      member_id: l.member_id,
+      loan_amount: l.loan_amount,
+      interest_rate: l.interest_rate,
+      issue_date: (l.issue_date || '').toString().slice(0, 10),
+      due_date: (l.due_date || '').toString().slice(0, 10)
+    });
+    setModal('edit');
+    setAvailableCash(null);
+  };
+
+  const openDelete = (l) => setDeleteTarget(l);
 
   const handleSubmit = async (e) => {
     e.preventDefault();
     setSaving(true);
     try {
-      await api.loans.create(form);
+      if (form.id) {
+        await api.loans.update(form.id, { member_id: form.member_id, loan_amount: form.loan_amount, interest_rate: form.interest_rate, issue_date: form.issue_date, due_date: form.due_date });
+      } else {
+        await api.loans.create(form);
+      }
       setModal(false);
       load();
     } catch (err) {
@@ -116,6 +139,21 @@ export default function Loans() {
       load();
     } catch (err) {
       setErrorModal({ title: 'Error', message: err.message });
+    }
+  };
+
+  const handleDelete = async () => {
+    if (!deleteTarget) return;
+    setDeleting(true);
+    try {
+      await api.loans.delete(deleteTarget.id);
+      setDeleteTarget(null);
+      load();
+      toast.success('Loan deleted.');
+    } catch (err) {
+      setErrorModal({ title: 'Error', message: err.message });
+    } finally {
+      setDeleting(false);
     }
   };
 
@@ -164,17 +202,26 @@ export default function Loans() {
                       <td>{parseFloat(l.balance || 0).toLocaleString()}</td>
                       <td><span className={`badge badge-${l.status?.toLowerCase()}`}>{l.status}</span></td>
                       <td>{formatDate(l.due_date)}</td>
-                      {isAdmin && l.status !== 'Completed' && (
+                      {isAdmin && (
                         <td>
-                          {l.status === 'Ongoing' && (
-                            <button type="button" className="btn btn-danger btn-sm" onClick={() => updateStatus(l.id, 'Defaulted')}>Mark Defaulted</button>
+                          {l.status !== 'Completed' && (
+                            <>
+                              <button type="button" className="btn btn-secondary btn-sm" onClick={() => openEdit(l)}>Edit</button>
+                              {l.status === 'Ongoing' && (
+                                <button type="button" className="btn btn-danger btn-sm" style={{ marginLeft: '0.5rem' }} onClick={() => updateStatus(l.id, 'Defaulted')}>Mark Defaulted</button>
+                              )}
+                              {l.status === 'Defaulted' && (
+                                <button type="button" className="btn btn-primary btn-sm" style={{ marginLeft: '0.5rem' }} onClick={() => updateStatus(l.id, 'Ongoing')}>Reinstate</button>
+                              )}
+                              {l.status === 'Pending' && (
+                                <button type="button" className="btn btn-primary btn-sm" style={{ marginLeft: '0.5rem' }} onClick={() => updateStatus(l.id, 'Ongoing')}>Approve</button>
+                              )}
+                            </>
                           )}
-                          {l.status === 'Defaulted' && (
-                            <button type="button" className="btn btn-primary btn-sm" onClick={() => updateStatus(l.id, 'Ongoing')}>Reinstate</button>
+                          {l.status === 'Completed' && (
+                            <button type="button" className="btn btn-secondary btn-sm" onClick={() => openEdit(l)}>Edit</button>
                           )}
-                          {l.status === 'Pending' && (
-                            <button type="button" className="btn btn-primary btn-sm" onClick={() => updateStatus(l.id, 'Ongoing')}>Approve</button>
-                          )}
+                          <button type="button" className="btn btn-danger btn-sm" style={{ marginLeft: '0.5rem' }} onClick={() => openDelete(l)}>Delete</button>
                         </td>
                       )}
                     </tr>
@@ -206,16 +253,22 @@ export default function Loans() {
                     <label>Status</label>
                     <span className={`badge badge-${l.status?.toLowerCase()}`}>{l.status}</span>
                   </div>
-                  {isAdmin && l.status !== 'Completed' && (
+                  {isAdmin && (
                     <div className="table-card-actions">
-                      {l.status === 'Ongoing' && (
-                        <button type="button" className="btn btn-danger btn-sm" onClick={() => updateStatus(l.id, 'Defaulted')}>Mark Defaulted</button>
-                      )}
-                      {l.status === 'Defaulted' && (
-                        <button type="button" className="btn btn-primary btn-sm" onClick={() => updateStatus(l.id, 'Ongoing')}>Reinstate</button>
-                      )}
-                      {l.status === 'Pending' && (
-                        <button type="button" className="btn btn-primary btn-sm" onClick={() => updateStatus(l.id, 'Ongoing')}>Approve</button>
+                      <button type="button" className="btn btn-secondary btn-sm" onClick={() => openEdit(l)}>Edit</button>
+                      <button type="button" className="btn btn-danger btn-sm" onClick={() => openDelete(l)}>Delete</button>
+                      {l.status !== 'Completed' && (
+                        <>
+                          {l.status === 'Ongoing' && (
+                            <button type="button" className="btn btn-danger btn-sm" onClick={() => updateStatus(l.id, 'Defaulted')}>Mark Defaulted</button>
+                          )}
+                          {l.status === 'Defaulted' && (
+                            <button type="button" className="btn btn-primary btn-sm" onClick={() => updateStatus(l.id, 'Ongoing')}>Reinstate</button>
+                          )}
+                          {l.status === 'Pending' && (
+                            <button type="button" className="btn btn-primary btn-sm" onClick={() => updateStatus(l.id, 'Ongoing')}>Approve</button>
+                          )}
+                        </>
                       )}
                     </div>
                   )}
@@ -229,8 +282,8 @@ export default function Loans() {
       {modal && (
         <div className="modal-overlay" onClick={() => setModal(false)}>
           <div className="modal-content" onClick={e => e.stopPropagation()}>
-            <h3>New Loan</h3>
-            {availableCash != null && (
+            <h3>{modal === 'edit' ? 'Edit Loan' : 'New Loan'}</h3>
+            {availableCash != null && modal === 'add' && (
               <div className="loan-available-info">
                 Available cash in group: <strong>{parseFloat(availableCash).toLocaleString()}</strong>
                 <span className="loan-available-hint">Loans are funded from contributions. Repayments go back to this pool.</span>
@@ -242,7 +295,7 @@ export default function Loans() {
                 <SearchableSelect
                   value={form.member_id}
                   onChange={val => setForm({ ...form, member_id: val })}
-                  options={members.filter(m => m.status === 'Active').map(m => ({
+                  options={members.filter(m => m.status === 'Active' || m.id == form.member_id).map(m => ({
                     value: m.id,
                     label: `${m.full_name} (Contrib: ${parseFloat(m.total_contributions || 0).toLocaleString()})`
                   }))}
@@ -268,7 +321,7 @@ export default function Loans() {
               </div>
               <div className="form-actions">
                 <button type="submit" className="btn btn-primary" disabled={saving}>
-                  {saving && <span className="loading-spinner" />}{saving ? 'Creating...' : 'Create'}
+                  {saving && <span className="loading-spinner" />}{saving ? (form.id ? 'Saving...' : 'Creating...') : (form.id ? 'Save' : 'Create')}
                 </button>
                 <button type="button" className="btn btn-secondary" onClick={() => setModal(false)}>Cancel</button>
               </div>
@@ -283,6 +336,16 @@ export default function Loans() {
           message={errorModal.message}
           explanation={errorModal.explanation}
           onClose={() => setErrorModal(null)}
+        />
+      )}
+
+      {deleteTarget && (
+        <DeleteModal
+          title="Delete Loan"
+          message={`Are you sure you want to delete the loan of ${parseFloat(deleteTarget.loan_amount).toLocaleString()} for ${deleteTarget.member_name}? This will also remove all repayment records for this loan.`}
+          onConfirm={handleDelete}
+          onCancel={() => setDeleteTarget(null)}
+          loading={deleting}
         />
       )}
     </div>

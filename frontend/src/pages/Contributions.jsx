@@ -11,10 +11,13 @@ const PAGE_SIZE = 10;
 
 const MONTHS = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
 
-function filterContributions(list, search) {
-  if (!search?.trim()) return list;
+function filterContributions(list, search, monthFilter, yearFilter) {
+  let out = list;
+  if (monthFilter) out = out.filter(c => c.month == monthFilter);
+  if (yearFilter) out = out.filter(c => c.year == yearFilter);
+  if (!search?.trim()) return out;
   const q = search.toLowerCase().trim();
-  return list.filter(c => {
+  return out.filter(c => {
     const member = (c.member_name || '').toLowerCase();
     const month = (c.month || '').toString();
     const year = (c.year || '').toString();
@@ -23,6 +26,8 @@ function filterContributions(list, search) {
     return member.includes(q) || month.includes(q) || year.includes(q) || amount.includes(q) || date.includes(q);
   });
 }
+
+const YEARS = Array.from({ length: 8 }, (_, i) => new Date().getFullYear() - i);
 
 export default function Contributions() {
   const [contributions, setContributions] = useState(() => {
@@ -38,6 +43,8 @@ export default function Contributions() {
     } catch { return []; }
   });
   const [search, setSearch] = useState('');
+  const [monthFilter, setMonthFilter] = useState('');
+  const [yearFilter, setYearFilter] = useState('');
   const [loading, setLoading] = useState(true);
   const [modal, setModal] = useState(false);
   const [page, setPage] = useState(1);
@@ -61,10 +68,10 @@ export default function Contributions() {
   };
   useEffect(() => { load(); }, []);
 
-  const filtered = filterContributions(contributions, search);
+  const filtered = filterContributions(contributions, search, monthFilter, yearFilter);
   const totalPages = Math.max(1, Math.ceil(filtered.length / PAGE_SIZE));
   const paginated = filtered.slice((page - 1) * PAGE_SIZE, page * PAGE_SIZE);
-  useEffect(() => { setPage(1); }, [search]);
+  useEffect(() => { setPage(1); }, [search, monthFilter, yearFilter]);
 
   const openAdd = () => {
     const d = new Date();
@@ -130,9 +137,30 @@ export default function Contributions() {
       </div>
 
       <div className="card">
-        <div className="form-group" style={{ marginBottom: '1rem', maxWidth: 320 }}>
-          <label>Search</label>
-          <input type="search" placeholder="Search member, month, year, amount, date..." value={search} onChange={e => setSearch(e.target.value)} />
+        <div style={{ display: 'flex', gap: '1rem', marginBottom: '1rem', flexWrap: 'wrap', alignItems: 'flex-end' }}>
+          <div className="form-group" style={{ marginBottom: 0, minWidth: 200 }}>
+            <label>Search</label>
+            <input type="search" placeholder="Search member, month, year, amount, date..." value={search} onChange={e => setSearch(e.target.value)} />
+          </div>
+          <div className="form-group" style={{ marginBottom: 0, minWidth: 120 }}>
+            <label>Month</label>
+            <select value={monthFilter} onChange={e => setMonthFilter(e.target.value)}>
+              <option value="">All months</option>
+              {MONTHS.map((m, i) => <option key={i} value={i + 1}>{m}</option>)}
+            </select>
+          </div>
+          <div className="form-group" style={{ marginBottom: 0, minWidth: 100 }}>
+            <label>Year</label>
+            <select value={yearFilter} onChange={e => setYearFilter(e.target.value)}>
+              <option value="">All years</option>
+              {YEARS.map(y => <option key={y} value={y}>{y}</option>)}
+            </select>
+          </div>
+          {(monthFilter || yearFilter) && (
+            <button type="button" className="btn btn-secondary btn-sm" onClick={() => { setMonthFilter(''); setYearFilter(''); }}>
+              Clear filters
+            </button>
+          )}
         </div>
         {loading ? (
           <div className="loading"><span className="loading-spinner" />Loading...</div>

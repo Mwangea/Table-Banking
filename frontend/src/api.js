@@ -33,7 +33,9 @@ export const api = {
     list: (params) => request('/loans' + (params ? '?' + new URLSearchParams(params).toString() : '')),
     get: (id) => request(`/loans/${id}`),
     create: (body) => request('/loans', { method: 'POST', body: JSON.stringify(body) }),
-    updateStatus: (id, status) => request(`/loans/${id}/status`, { method: 'PUT', body: JSON.stringify({ status }) })
+    update: (id, body) => request(`/loans/${id}`, { method: 'PUT', body: JSON.stringify(body) }),
+    updateStatus: (id, status) => request(`/loans/${id}/status`, { method: 'PUT', body: JSON.stringify({ status }) }),
+    delete: (id) => request(`/loans/${id}`, { method: 'DELETE' })
   },
   repayments: {
     list: (params) => request('/repayments' + (params ? '?' + new URLSearchParams(params).toString() : '')),

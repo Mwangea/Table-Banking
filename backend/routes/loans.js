@@ -131,4 +131,52 @@ router.put('/:id/status', authenticate, requireAdmin, async (req, res) => {
   }
 });
 
+router.put('/:id', authenticate, requireAdmin, async (req, res) => {
+  try {
+    const { member_id, loan_amount, interest_rate, issue_date, due_date } = req.body;
+    if (!member_id || !loan_amount || !interest_rate || !issue_date || !due_date) {
+      return res.status(400).json({ error: 'member_id, loan_amount, interest_rate, issue_date, due_date are required' });
+    }
+    const [existing] = await pool.query('SELECT * FROM loans WHERE id = ?', [req.params.id]);
+    if (existing.length === 0) return res.status(404).json({ error: 'Loan not found' });
+    if (existing[0].status === 'Completed') {
+      return res.status(400).json({ error: 'Cannot edit a completed loan' });
+    }
+    const [member] = await pool.query('SELECT status FROM members WHERE id = ?', [member_id]);
+    if (member.length === 0) return res.status(404).json({ error: 'Member not found' });
+    const loanAmount = parseFloat(loan_amount);
+    const rate = parseFloat(interest_rate) / 100;
+    const interestAmount = loanAmount * rate;
+    const totalAmount = loanAmount + interestAmount;
+    const [rep] = await pool.query('SELECT COALESCE(SUM(amount_paid), 0) as total_paid FROM repayments WHERE loan_id = ?', [req.params.id]);
+    const totalPaid = parseFloat(rep[0].total_paid);
+    if (totalAmount < totalPaid) {
+      return res.status(400).json({ error: `Total amount cannot be less than amount already repaid (${totalPaid.toFixed(2)})` });
+    }
+    await pool.query(
+      'UPDATE loans SET member_id = ?, loan_amount = ?, interest_rate = ?, interest_amount = ?, total_amount = ?, issue_date = ?, due_date = ? WHERE id = ?',
+      [member_id, loanAmount, interest_rate, interestAmount, totalAmount, issue_date, due_date, req.params.id]
+    );
+    const [loans] = await pool.query(
+      'SELECT l.*, m.full_name as member_name FROM loans l JOIN members m ON l.member_id = m.id WHERE l.id = ?',
+      [req.params.id]
+    );
+    const [rep2] = await pool.query('SELECT COALESCE(SUM(amount_paid), 0) as total_paid FROM repayments WHERE loan_id = ?', [req.params.id]);
+    const row = { ...loans[0], total_paid: parseFloat(rep2[0].total_paid), balance: parseFloat(loans[0].total_amount) - parseFloat(rep2[0].total_paid) };
+    res.json(row);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+router.delete('/:id', authenticate, requireAdmin, async (req, res) => {
+  try {
+    const [result] = await pool.query('DELETE FROM loans WHERE id = ?', [req.params.id]);
+    if (result.affectedRows === 0) return res.status(404).json({ error: 'Loan not found' });
+    res.json({ message: 'Deleted' });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
 export default router;
