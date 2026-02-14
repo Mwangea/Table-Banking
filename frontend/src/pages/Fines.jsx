@@ -1,6 +1,12 @@
 import { useState, useEffect } from 'react';
+import toast from 'react-hot-toast';
 import { api } from '../api';
 import { formatDate } from '../utils/formatDate';
+import Pagination from '../components/Pagination';
+import SearchableSelect from '../components/SearchableSelect';
+
+const CACHE_KEY = 'table_banking_fines';
+const PAGE_SIZE = 10;
 
 function filterList(list, search) {
   if (!search?.trim()) return list;
@@ -16,14 +22,27 @@ function filterList(list, search) {
 }
 
 export default function Fines() {
-  const [list, setList] = useState([]);
-  const [members, setMembers] = useState([]);
+  const [list, setList] = useState(() => {
+    try {
+      const cached = localStorage.getItem(CACHE_KEY);
+      return cached ? JSON.parse(cached) : [];
+    } catch { return []; }
+  });
+  const [members, setMembers] = useState(() => {
+    try {
+      const cached = localStorage.getItem('table_banking_members');
+      return cached ? JSON.parse(cached) : [];
+    } catch { return []; }
+  });
   const [settings, setSettings] = useState({});
   const [search, setSearch] = useState('');
   const [statusFilter, setStatusFilter] = useState('');
   const [loading, setLoading] = useState(true);
   const [modal, setModal] = useState(false);
   const [payModal, setPayModal] = useState(null);
+  const [page, setPage] = useState(1);
+  const [saving, setSaving] = useState(false);
+  const [paying, setPaying] = useState(false);
   const [paymentDate, setPaymentDate] = useState('');
   const [form, setForm] = useState({ member_id: '', amount: '', reason: '', issued_date: '' });
 
@@ -31,14 +50,23 @@ export default function Fines() {
     setLoading(true);
     const params = statusFilter ? { status: statusFilter } : null;
     Promise.all([
-      api.fines.list(params).then(setList),
-      api.members.list().then(setMembers),
+      api.fines.list(params).then(data => {
+        setList(data);
+        try { localStorage.setItem(CACHE_KEY, JSON.stringify(data)); } catch {}
+      }),
+      api.members.list().then(data => {
+        setMembers(data);
+        try { localStorage.setItem('table_banking_members', JSON.stringify(data)); } catch {}
+      }),
       api.settings.get().then(setSettings)
     ]).finally(() => setLoading(false));
   };
   useEffect(() => { load(); }, [statusFilter]);
 
   const filtered = filterList(list, search);
+  const totalPages = Math.max(1, Math.ceil(filtered.length / PAGE_SIZE));
+  const paginated = filtered.slice((page - 1) * PAGE_SIZE, page * PAGE_SIZE);
+  useEffect(() => { setPage(1); }, [search, statusFilter]);
   const defaultFine = parseFloat(settings.default_fine_amount || 100);
   const unpaidTotal = list.filter(f => f.status === 'Unpaid').reduce((s, f) => s + parseFloat(f.amount || 0), 0);
   const paidTotal = list.filter(f => f.status === 'Paid').reduce((s, f) => s + parseFloat(f.amount || 0), 0);
@@ -56,24 +84,32 @@ export default function Fines() {
 
   const handleSubmit = async (e) => {
     e.preventDefault();
+    setSaving(true);
     try {
       await api.fines.create(form);
       setModal(false);
       load();
     } catch (err) {
-      alert(err.message);
+      toast.error(err.message);
+    } finally {
+      setSaving(false);
     }
   };
 
   const handlePay = async (e) => {
     e.preventDefault();
     if (!payModal) return;
+    setPaying(true);
     try {
-      await api.fines.pay(payModal.id, { payment_date: paymentDate });
+      const res = await api.fines.pay(payModal.id, { payment_date: paymentDate });
+      const amount = res?.addedToPool ?? parseFloat(payModal.amount || 0);
       setPayModal(null);
       load();
+      toast.success(`${amount.toLocaleString()} has been added to the group pool.`);
     } catch (err) {
-      alert(err.message);
+      toast.error(err.message);
+    } finally {
+      setPaying(false);
     }
   };
 
@@ -120,7 +156,7 @@ export default function Fines() {
                 </tr>
               </thead>
               <tbody>
-                {filtered.map(r => (
+                {paginated.map(r => (
                   <tr key={r.id}>
                     <td>{formatDate(r.issued_date)}</td>
                     <td>{r.member_name}</td>
@@ -137,6 +173,7 @@ export default function Fines() {
               </tbody>
             </table>
           </div>
+          <Pagination page={page} totalPages={totalPages} totalItems={filtered.length} pageSize={PAGE_SIZE} onPageChange={setPage} />
         )}
       </div>
 
@@ -147,12 +184,13 @@ export default function Fines() {
             <form onSubmit={handleSubmit}>
               <div className="form-group">
                 <label>Member</label>
-                <select value={form.member_id} onChange={e => setForm({ ...form, member_id: e.target.value })} required>
-                  <option value="">Select member</option>
-                  {members.filter(m => m.status === 'Active').map(m => (
-                    <option key={m.id} value={m.id}>{m.full_name}</option>
-                  ))}
-                </select>
+                <SearchableSelect
+                  value={form.member_id}
+                  onChange={val => setForm({ ...form, member_id: val })}
+                  options={members.filter(m => m.status === 'Active').map(m => ({ value: m.id, label: m.full_name }))}
+                  placeholder="Select member"
+                  required
+                />
               </div>
               <div className="form-group">
                 <label>Amount</label>
@@ -167,7 +205,9 @@ export default function Fines() {
                 <input type="date" value={form.issued_date} onChange={e => setForm({ ...form, issued_date: e.target.value })} required />
               </div>
               <div className="form-actions">
-                <button type="submit" className="btn btn-primary">Save</button>
+                <button type="submit" className="btn btn-primary" disabled={saving}>
+                  {saving && <span className="loading-spinner" />}{saving ? 'Saving...' : 'Save'}
+                </button>
                 <button type="button" className="btn btn-secondary" onClick={() => setModal(false)}>Cancel</button>
               </div>
             </form>
@@ -186,7 +226,9 @@ export default function Fines() {
                 <input type="date" value={paymentDate} onChange={e => setPaymentDate(e.target.value)} required />
               </div>
               <div className="form-actions">
-                <button type="submit" className="btn btn-primary">Confirm Payment</button>
+                <button type="submit" className="btn btn-primary" disabled={paying}>
+                  {paying && <span className="loading-spinner" />}{paying ? 'Confirming...' : 'Confirm Payment'}
+                </button>
                 <button type="button" className="btn btn-secondary" onClick={() => setPayModal(null)}>Cancel</button>
               </div>
             </form>

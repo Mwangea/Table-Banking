@@ -64,7 +64,8 @@ router.put('/:id/pay', authenticate, async (req, res) => {
     );
     if (result.affectedRows === 0) return res.status(404).json({ error: 'Fine not found or already paid' });
     const [[row]] = await pool.query('SELECT * FROM fines WHERE id = ?', [req.params.id]);
-    res.json(row);
+    const amount = parseFloat(row.amount || 0);
+    res.json({ ...row, addedToPool: amount });
   } catch (err) {
     res.status(500).json({ error: err.message });
   }

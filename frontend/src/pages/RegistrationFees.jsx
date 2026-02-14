@@ -1,6 +1,12 @@
 import { useState, useEffect } from 'react';
+import toast from 'react-hot-toast';
 import { api } from '../api';
 import { formatDate } from '../utils/formatDate';
+import Pagination from '../components/Pagination';
+import SearchableSelect from '../components/SearchableSelect';
+
+const CACHE_KEY = 'table_banking_registration_fees';
+const PAGE_SIZE = 10;
 
 function filterList(list, search) {
   if (!search?.trim()) return list;
@@ -14,25 +20,46 @@ function filterList(list, search) {
 }
 
 export default function RegistrationFees() {
-  const [list, setList] = useState([]);
-  const [members, setMembers] = useState([]);
+  const [list, setList] = useState(() => {
+    try {
+      const cached = localStorage.getItem(CACHE_KEY);
+      return cached ? JSON.parse(cached) : [];
+    } catch { return []; }
+  });
+  const [members, setMembers] = useState(() => {
+    try {
+      const cached = localStorage.getItem('table_banking_members');
+      return cached ? JSON.parse(cached) : [];
+    } catch { return []; }
+  });
   const [settings, setSettings] = useState({});
   const [search, setSearch] = useState('');
   const [loading, setLoading] = useState(true);
   const [modal, setModal] = useState(false);
+  const [page, setPage] = useState(1);
+  const [saving, setSaving] = useState(false);
   const [form, setForm] = useState({ member_id: '', amount: '', payment_date: '' });
 
   const load = () => {
     setLoading(true);
     Promise.all([
-      api.registrationFees.list().then(setList),
-      api.members.list().then(setMembers),
+      api.registrationFees.list().then(data => {
+        setList(data);
+        try { localStorage.setItem(CACHE_KEY, JSON.stringify(data)); } catch {}
+      }),
+      api.members.list().then(data => {
+        setMembers(data);
+        try { localStorage.setItem('table_banking_members', JSON.stringify(data)); } catch {}
+      }),
       api.settings.get().then(setSettings)
     ]).finally(() => setLoading(false));
   };
   useEffect(() => { load(); }, []);
 
   const filtered = filterList(list, search);
+  const totalPages = Math.max(1, Math.ceil(filtered.length / PAGE_SIZE));
+  const paginated = filtered.slice((page - 1) * PAGE_SIZE, page * PAGE_SIZE);
+  useEffect(() => { setPage(1); }, [search]);
   const regFeeAmount = parseFloat(settings.registration_fee_amount || 500);
   const paidMemberIds = new Set(list.map(r => r.member_id));
   const membersWithoutFee = members.filter(m => m.status === 'Active' && !paidMemberIds.has(m.id));
@@ -47,12 +74,15 @@ export default function RegistrationFees() {
 
   const handleSubmit = async (e) => {
     e.preventDefault();
+    setSaving(true);
     try {
       await api.registrationFees.create(form);
       setModal(false);
       load();
     } catch (err) {
-      alert(err.message);
+      toast.error(err.message);
+    } finally {
+      setSaving(false);
     }
   };
 
@@ -85,7 +115,7 @@ export default function RegistrationFees() {
                 </tr>
               </thead>
               <tbody>
-                {filtered.map(r => (
+                {paginated.map(r => (
                   <tr key={r.id}>
                     <td>{formatDate(r.payment_date)}</td>
                     <td>{r.member_name}</td>
@@ -95,6 +125,7 @@ export default function RegistrationFees() {
               </tbody>
             </table>
           </div>
+          <Pagination page={page} totalPages={totalPages} totalItems={filtered.length} pageSize={PAGE_SIZE} onPageChange={setPage} />
         )}
       </div>
 
@@ -105,14 +136,16 @@ export default function RegistrationFees() {
             <form onSubmit={handleSubmit}>
               <div className="form-group">
                 <label>Member</label>
-                <select value={form.member_id} onChange={e => setForm({ ...form, member_id: e.target.value })} required>
-                  <option value="">Select member</option>
-                  {members.filter(m => m.status === 'Active').map(m => (
-                    <option key={m.id} value={m.id}>
-                      {m.full_name}{paidMemberIds.has(m.id) ? ' (already paid)' : ''}
-                    </option>
-                  ))}
-                </select>
+                <SearchableSelect
+                  value={form.member_id}
+                  onChange={val => setForm({ ...form, member_id: val })}
+                  options={members.filter(m => m.status === 'Active').map(m => ({
+                    value: m.id,
+                    label: `${m.full_name}${paidMemberIds.has(m.id) ? ' (already paid)' : ''}`
+                  }))}
+                  placeholder="Select member"
+                  required
+                />
               </div>
               <div className="form-group">
                 <label>Amount</label>
@@ -123,7 +156,9 @@ export default function RegistrationFees() {
                 <input type="date" value={form.payment_date} onChange={e => setForm({ ...form, payment_date: e.target.value })} required />
               </div>
               <div className="form-actions">
-                <button type="submit" className="btn btn-primary">Save</button>
+                <button type="submit" className="btn btn-primary" disabled={saving}>
+                  {saving && <span className="loading-spinner" />}{saving ? 'Saving...' : 'Save'}
+                </button>
                 <button type="button" className="btn btn-secondary" onClick={() => setModal(false)}>Cancel</button>
               </div>
             </form>

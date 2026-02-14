@@ -25,7 +25,9 @@ export const api = {
   },
   contributions: {
     list: (params) => request('/contributions' + (params ? '?' + new URLSearchParams(params).toString() : '')),
-    create: (body) => request('/contributions', { method: 'POST', body: JSON.stringify(body) })
+    create: (body) => request('/contributions', { method: 'POST', body: JSON.stringify(body) }),
+    update: (id, body) => request(`/contributions/${id}`, { method: 'PUT', body: JSON.stringify(body) }),
+    delete: (id) => request(`/contributions/${id}`, { method: 'DELETE' })
   },
   loans: {
     list: (params) => request('/loans' + (params ? '?' + new URLSearchParams(params).toString() : '')),

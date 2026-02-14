@@ -1,6 +1,11 @@
 import { useState, useEffect } from 'react';
+import toast from 'react-hot-toast';
 import { api } from '../api';
 import { formatDate } from '../utils/formatDate';
+import Pagination from '../components/Pagination';
+
+const CACHE_KEY = 'table_banking_expenses';
+const PAGE_SIZE = 10;
 
 function filterList(list, search) {
   if (!search?.trim()) return list;
@@ -15,19 +20,32 @@ function filterList(list, search) {
 }
 
 export default function Expenses() {
-  const [list, setList] = useState([]);
+  const [list, setList] = useState(() => {
+    try {
+      const cached = localStorage.getItem(CACHE_KEY);
+      return cached ? JSON.parse(cached) : [];
+    } catch { return []; }
+  });
   const [search, setSearch] = useState('');
   const [loading, setLoading] = useState(true);
   const [modal, setModal] = useState(false);
+  const [page, setPage] = useState(1);
+  const [saving, setSaving] = useState(false);
   const [form, setForm] = useState({ amount: '', expense_date: '', category: '', description: '' });
 
   const load = () => {
     setLoading(true);
-    api.expenses.list().then(setList).finally(() => setLoading(false));
+    api.expenses.list().then(data => {
+      setList(data);
+      try { localStorage.setItem(CACHE_KEY, JSON.stringify(data)); } catch {}
+    }).finally(() => setLoading(false));
   };
   useEffect(() => { load(); }, []);
 
   const filtered = filterList(list, search);
+  const totalPages = Math.max(1, Math.ceil(filtered.length / PAGE_SIZE));
+  const paginated = filtered.slice((page - 1) * PAGE_SIZE, page * PAGE_SIZE);
+  useEffect(() => { setPage(1); }, [search]);
 
   const openAdd = () => {
     const d = new Date();
@@ -37,12 +55,15 @@ export default function Expenses() {
 
   const handleSubmit = async (e) => {
     e.preventDefault();
+    setSaving(true);
     try {
       await api.expenses.create(form);
       setModal(false);
       load();
     } catch (err) {
-      alert(err.message);
+      toast.error(err.message);
+    } finally {
+      setSaving(false);
     }
   };
 
@@ -77,7 +98,7 @@ export default function Expenses() {
                 </tr>
               </thead>
               <tbody>
-                {filtered.map(r => (
+                {paginated.map(r => (
                   <tr key={r.id}>
                     <td>{formatDate(r.expense_date)}</td>
                     <td>{r.category || '-'}</td>
@@ -88,6 +109,7 @@ export default function Expenses() {
               </tbody>
             </table>
           </div>
+          <Pagination page={page} totalPages={totalPages} totalItems={filtered.length} pageSize={PAGE_SIZE} onPageChange={setPage} />
         )}
       </div>
 
@@ -113,7 +135,9 @@ export default function Expenses() {
                 <input value={form.description} onChange={e => setForm({ ...form, description: e.target.value })} placeholder="Details..." />
               </div>
               <div className="form-actions">
-                <button type="submit" className="btn btn-primary">Save</button>
+                <button type="submit" className="btn btn-primary" disabled={saving}>
+                  {saving && <span className="loading-spinner" />}{saving ? 'Saving...' : 'Save'}
+                </button>
                 <button type="button" className="btn btn-secondary" onClick={() => setModal(false)}>Cancel</button>
               </div>
             </form>

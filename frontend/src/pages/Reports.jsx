@@ -1,5 +1,6 @@
 import { useState, useEffect, useRef } from 'react';
 import { api, exportUrl } from '../api';
+import SearchableSelect from '../components/SearchableSelect';
 import { formatDate } from '../utils/formatDate';
 import { FiDownload, FiFileText, FiChevronDown, FiUser } from 'react-icons/fi';
 
@@ -177,10 +178,12 @@ export default function Reports() {
           </div>
           <div className="form-group" style={{ marginBottom: '1rem' }}>
             <label>Select Member</label>
-            <select value={selectedMember || ''} onChange={e => loadStatement(e.target.value)}>
-              <option value="">Choose member</option>
-              {members.map(m => <option key={m.id} value={m.id}>{m.full_name}</option>)}
-            </select>
+            <SearchableSelect
+              value={selectedMember || ''}
+              onChange={val => loadStatement(val)}
+              options={members.map(m => ({ value: m.id, label: m.full_name }))}
+              placeholder="Choose member"
+            />
           </div>
           {selectedMember && (
             <a href={exportUrl(`/export/member-statement/${selectedMember}`)} className="btn btn-secondary btn-sm" style={{ marginBottom: '1rem' }} target="_blank" rel="noreferrer">

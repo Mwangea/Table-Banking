@@ -1,6 +1,12 @@
 import { useState, useEffect } from 'react';
+import toast from 'react-hot-toast';
 import { api, exportUrl } from '../api';
 import { formatDate } from '../utils/formatDate';
+import Pagination from '../components/Pagination';
+import SearchableSelect from '../components/SearchableSelect';
+
+const CACHE_KEY = 'table_banking_repayments';
+const PAGE_SIZE = 10;
 
 function filterRepayments(list, search) {
   if (!search?.trim()) return list;
@@ -15,21 +21,44 @@ function filterRepayments(list, search) {
 }
 
 export default function Repayments() {
-  const [repayments, setRepayments] = useState([]);
-  const [loans, setLoans] = useState([]);
+  const [repayments, setRepayments] = useState(() => {
+    try {
+      const cached = localStorage.getItem(CACHE_KEY);
+      return cached ? JSON.parse(cached) : [];
+    } catch { return []; }
+  });
+  const [loans, setLoans] = useState(() => {
+    try {
+      const cached = localStorage.getItem('table_banking_loans');
+      return cached ? JSON.parse(cached) : [];
+    } catch { return []; }
+  });
   const [search, setSearch] = useState('');
   const [loading, setLoading] = useState(true);
   const [modal, setModal] = useState(false);
+  const [page, setPage] = useState(1);
+  const [saving, setSaving] = useState(false);
   const [form, setForm] = useState({ loan_id: '', amount_paid: '', payment_date: '' });
 
   const load = () => {
     setLoading(true);
-    Promise.all([api.repayments.list().then(setRepayments), api.loans.list().then(setLoans)])
-      .finally(() => setLoading(false));
+    Promise.all([
+      api.repayments.list().then(data => {
+        setRepayments(data);
+        try { localStorage.setItem(CACHE_KEY, JSON.stringify(data)); } catch {}
+      }),
+      api.loans.list().then(data => {
+        setLoans(data);
+        try { localStorage.setItem('table_banking_loans', JSON.stringify(data)); } catch {}
+      })
+    ]).finally(() => setLoading(false));
   };
   useEffect(() => { load(); }, []);
 
   const filtered = filterRepayments(repayments, search);
+  const totalPages = Math.max(1, Math.ceil(filtered.length / PAGE_SIZE));
+  const paginated = filtered.slice((page - 1) * PAGE_SIZE, page * PAGE_SIZE);
+  useEffect(() => { setPage(1); }, [search]);
 
   const openAdd = () => {
     const d = new Date();
@@ -40,12 +69,15 @@ export default function Repayments() {
 
   const handleSubmit = async (e) => {
     e.preventDefault();
+    setSaving(true);
     try {
       await api.repayments.create(form);
       setModal(false);
       load();
     } catch (err) {
-      alert(err.message);
+      toast.error(err.message);
+    } finally {
+      setSaving(false);
     }
   };
 
@@ -85,7 +117,7 @@ export default function Repayments() {
                   </tr>
                 </thead>
                 <tbody>
-                  {filtered.map(r => (
+                  {paginated.map(r => (
                     <tr key={r.id}>
                       <td>{formatDate(r.payment_date)}</td>
                       <td>{r.member_name}</td>
@@ -96,8 +128,9 @@ export default function Repayments() {
                 </tbody>
               </table>
             </div>
+            <Pagination page={page} totalPages={totalPages} totalItems={filtered.length} pageSize={PAGE_SIZE} onPageChange={setPage} />
             <div className="table-cards">
-              {filtered.map(r => (
+              {paginated.map(r => (
                 <div key={r.id} className="table-card">
                   <div className="table-card-row">
                     <label>Member</label>
@@ -125,14 +158,17 @@ export default function Repayments() {
             <form onSubmit={handleSubmit}>
               <div className="form-group">
                 <label>Loan</label>
-                <select value={form.loan_id} onChange={e => setForm({ ...form, loan_id: e.target.value })} required>
-                  <option value="">Select loan</option>
-                  {repayableLoans.map(l => (
-                    <option key={l.id} value={l.id}>
-                      #{l.id} - {l.member_name} - Balance: {parseFloat(l.balance ?? 0).toLocaleString()}
-                    </option>
-                  ))}
-                </select>
+                <SearchableSelect
+                  value={form.loan_id}
+                  onChange={val => setForm({ ...form, loan_id: val })}
+                  options={repayableLoans.map(l => ({
+                    value: l.id,
+                    label: `#${l.id} - ${l.member_name} - Balance: ${parseFloat(l.balance ?? 0).toLocaleString()}`
+                  }))}
+                  placeholder="Select loan"
+                  required
+                  disabled={repayableLoans.length === 0}
+                />
                 {repayableLoans.length === 0 && (
                   <p className="no-loans-msg">No loans with outstanding balance. Approve a loan first from the Loans page.</p>
                 )}
@@ -146,8 +182,8 @@ export default function Repayments() {
                 <input type="date" value={form.payment_date} onChange={e => setForm({ ...form, payment_date: e.target.value })} required />
               </div>
               <div className="form-actions">
-                <button type="submit" className="btn btn-primary" disabled={repayableLoans.length === 0}>
-                  Save
+                <button type="submit" className="btn btn-primary" disabled={repayableLoans.length === 0 || saving}>
+                  {saving && <span className="loading-spinner" />}{saving ? 'Saving...' : 'Save'}
                 </button>
                 <button type="button" className="btn btn-secondary" onClick={() => setModal(false)}>Cancel</button>
               </div>

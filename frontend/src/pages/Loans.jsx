@@ -2,6 +2,11 @@ import { useState, useEffect } from 'react';
 import { api, exportUrl } from '../api';
 import { formatDate } from '../utils/formatDate';
 import AlertModal from '../components/AlertModal';
+import Pagination from '../components/Pagination';
+import SearchableSelect from '../components/SearchableSelect';
+
+const CACHE_KEY = 'table_banking_loans';
+const PAGE_SIZE = 10;
 
 function filterLoans(list, search) {
   if (!search?.trim()) return list;
@@ -21,13 +26,25 @@ function filterLoans(list, search) {
 }
 
 export default function Loans() {
-  const [loans, setLoans] = useState([]);
-  const [members, setMembers] = useState([]);
+  const [loans, setLoans] = useState(() => {
+    try {
+      const cached = localStorage.getItem(CACHE_KEY);
+      return cached ? JSON.parse(cached) : [];
+    } catch { return []; }
+  });
+  const [members, setMembers] = useState(() => {
+    try {
+      const cached = localStorage.getItem('table_banking_members');
+      return cached ? JSON.parse(cached) : [];
+    } catch { return []; }
+  });
   const [search, setSearch] = useState('');
   const [loading, setLoading] = useState(true);
   const [modal, setModal] = useState(false);
   const [form, setForm] = useState({ member_id: '', loan_amount: '', interest_rate: '10', issue_date: '', due_date: '' });
   const [settings, setSettings] = useState({});
+  const [page, setPage] = useState(1);
+  const [saving, setSaving] = useState(false);
   const [availableCash, setAvailableCash] = useState(null);
   const [errorModal, setErrorModal] = useState(null);
   const user = JSON.parse(localStorage.getItem('user') || '{}');
@@ -36,14 +53,23 @@ export default function Loans() {
   const load = () => {
     setLoading(true);
     Promise.all([
-      api.loans.list().then(setLoans),
-      api.members.list().then(setMembers),
+      api.loans.list().then(data => {
+        setLoans(data);
+        try { localStorage.setItem(CACHE_KEY, JSON.stringify(data)); } catch {}
+      }),
+      api.members.list().then(data => {
+        setMembers(data);
+        try { localStorage.setItem('table_banking_members', JSON.stringify(data)); } catch {}
+      }),
       api.settings.get().then(setSettings)
     ]).finally(() => setLoading(false));
   };
   useEffect(() => { load(); }, []);
 
   const filtered = filterLoans(loans, search);
+  const totalPages = Math.max(1, Math.ceil(filtered.length / PAGE_SIZE));
+  const paginated = filtered.slice((page - 1) * PAGE_SIZE, page * PAGE_SIZE);
+  useEffect(() => { setPage(1); }, [search]);
 
   const openAdd = () => {
     const d = new Date();
@@ -54,6 +80,7 @@ export default function Loans() {
 
   const handleSubmit = async (e) => {
     e.preventDefault();
+    setSaving(true);
     try {
       await api.loans.create(form);
       setModal(false);
@@ -78,6 +105,8 @@ export default function Loans() {
       } else {
         setErrorModal({ title: 'Error', message: msg });
       }
+    } finally {
+      setSaving(false);
     }
   };
 
@@ -125,7 +154,7 @@ export default function Loans() {
                   </tr>
                 </thead>
                 <tbody>
-                  {filtered.map(l => (
+                  {paginated.map(l => (
                     <tr key={l.id}>
                       <td>{l.member_name}</td>
                       <td>{parseFloat(l.loan_amount).toLocaleString()}</td>
@@ -153,8 +182,9 @@ export default function Loans() {
                 </tbody>
               </table>
             </div>
+            <Pagination page={page} totalPages={totalPages} totalItems={filtered.length} pageSize={PAGE_SIZE} onPageChange={setPage} />
             <div className="table-cards">
-              {filtered.map(l => (
+              {paginated.map(l => (
                 <div key={l.id} className="table-card">
                   <div className="table-card-row">
                     <label>Member</label>
@@ -209,12 +239,16 @@ export default function Loans() {
             <form onSubmit={handleSubmit}>
               <div className="form-group">
                 <label>Member</label>
-                <select value={form.member_id} onChange={e => setForm({ ...form, member_id: e.target.value })} required>
-                  <option value="">Select member</option>
-                  {members.filter(m => m.status === 'Active').map(m => (
-                    <option key={m.id} value={m.id}>{m.full_name} (Contrib: {parseFloat(m.total_contributions || 0).toLocaleString()})</option>
-                  ))}
-                </select>
+                <SearchableSelect
+                  value={form.member_id}
+                  onChange={val => setForm({ ...form, member_id: val })}
+                  options={members.filter(m => m.status === 'Active').map(m => ({
+                    value: m.id,
+                    label: `${m.full_name} (Contrib: ${parseFloat(m.total_contributions || 0).toLocaleString()})`
+                  }))}
+                  placeholder="Select member"
+                  required
+                />
               </div>
               <div className="form-group">
                 <label>Loan Amount</label>
@@ -233,7 +267,9 @@ export default function Loans() {
                 <input type="date" value={form.due_date} onChange={e => setForm({ ...form, due_date: e.target.value })} required />
               </div>
               <div className="form-actions">
-                <button type="submit" className="btn btn-primary">Create</button>
+                <button type="submit" className="btn btn-primary" disabled={saving}>
+                  {saving && <span className="loading-spinner" />}{saving ? 'Creating...' : 'Create'}
+                </button>
                 <button type="button" className="btn btn-secondary" onClick={() => setModal(false)}>Cancel</button>
               </div>
             </form>

@@ -1,4 +1,5 @@
 import { useState, useEffect } from 'react';
+import toast from 'react-hot-toast';
 import { api } from '../api';
 
 export default function Settings() {
@@ -30,7 +31,7 @@ export default function Settings() {
       await api.settings.update(form);
       setSettings({ ...settings, ...form });
     } catch (err) {
-      alert(err.message);
+      toast.error(err.message);
     } finally {
       setSaving(false);
     }
@@ -44,7 +45,7 @@ export default function Settings() {
       setUserForm({ username: '', password: '', role: 'treasurer' });
       api.users.list().then(setUsers);
     } catch (err) {
-      alert(err.message);
+      toast.error(err.message);
     } finally {
       setCreatingUser(false);
     }

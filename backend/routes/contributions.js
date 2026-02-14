@@ -37,4 +37,32 @@ router.post('/', authenticate, async (req, res) => {
   }
 });
 
+router.put('/:id', authenticate, async (req, res) => {
+  try {
+    const { member_id, amount, contribution_date, month, year } = req.body;
+    if (!member_id || !amount || !contribution_date || !month || !year) {
+      return res.status(400).json({ error: 'member_id, amount, contribution_date, month, year are required' });
+    }
+    const [result] = await pool.query(
+      'UPDATE contributions SET member_id = ?, amount = ?, contribution_date = ?, month = ?, year = ? WHERE id = ?',
+      [member_id, parseFloat(amount), contribution_date, month, year, req.params.id]
+    );
+    if (result.affectedRows === 0) return res.status(404).json({ error: 'Not found' });
+    const [[row]] = await pool.query('SELECT c.*, m.full_name as member_name FROM contributions c JOIN members m ON c.member_id = m.id WHERE c.id = ?', [req.params.id]);
+    res.json(row);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+router.delete('/:id', authenticate, async (req, res) => {
+  try {
+    const [result] = await pool.query('DELETE FROM contributions WHERE id = ?', [req.params.id]);
+    if (result.affectedRows === 0) return res.status(404).json({ error: 'Not found' });
+    res.json({ message: 'Deleted' });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
 export default router;

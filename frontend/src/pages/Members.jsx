@@ -1,7 +1,11 @@
 import { useState, useEffect } from 'react';
+import toast from 'react-hot-toast';
 import { api, exportUrl } from '../api';
 import { formatDate } from '../utils/formatDate';
 import DeleteModal from '../components/DeleteModal';
+import Pagination from '../components/Pagination';
+
+const PAGE_SIZE = 10;
 
 const CACHE_KEY = 'table_banking_members';
 
@@ -34,6 +38,8 @@ export default function Members() {
   const [deleting, setDeleting] = useState(false);
   const [form, setForm] = useState({ full_name: '', phone: '', national_id: '', date_joined: '', status: 'Active', record_reg_fee: false });
   const [settings, setSettings] = useState({});
+  const [page, setPage] = useState(1);
+  const [saving, setSaving] = useState(false);
   const user = JSON.parse(localStorage.getItem('user') || '{}');
   const isAdmin = user.role === 'admin';
 
@@ -48,6 +54,9 @@ export default function Members() {
   useEffect(() => { api.settings.get().then(setSettings).catch(() => {}); }, []);
 
   const filtered = filterMembers(members, search);
+  const totalPages = Math.max(1, Math.ceil(filtered.length / PAGE_SIZE));
+  const paginated = filtered.slice((page - 1) * PAGE_SIZE, page * PAGE_SIZE);
+  useEffect(() => { setPage(1); }, [search]);
 
   const openAdd = () => {
     setModal('add');
@@ -71,7 +80,7 @@ export default function Members() {
       setDeleteTarget(null);
       load();
     } catch (err) {
-      alert(err.message);
+      toast.error(err.message);
     } finally {
       setDeleting(false);
     }
@@ -79,6 +88,7 @@ export default function Members() {
 
   const handleSubmit = async (e) => {
     e.preventDefault();
+    setSaving(true);
     try {
       if (modal === 'add') {
         const { record_reg_fee, ...memberData } = form;
@@ -94,7 +104,9 @@ export default function Members() {
       setModal(null);
       load();
     } catch (err) {
-      alert(err.message);
+      toast.error(err.message);
+    } finally {
+      setSaving(false);
     }
   };
 
@@ -132,7 +144,7 @@ export default function Members() {
                   </tr>
                 </thead>
                 <tbody>
-                  {filtered.map(m => (
+                  {paginated.map(m => (
                     <tr key={m.id}>
                       <td>{m.full_name}</td>
                       <td>{m.phone}</td>
@@ -152,8 +164,9 @@ export default function Members() {
                 </tbody>
               </table>
             </div>
+            <Pagination page={page} totalPages={totalPages} totalItems={filtered.length} pageSize={PAGE_SIZE} onPageChange={setPage} />
             <div className="table-cards">
-              {filtered.map(m => (
+              {paginated.map(m => (
                 <div key={m.id} className="table-card">
                   <div className="table-card-row">
                     <label>Name</label>
@@ -229,7 +242,9 @@ export default function Members() {
                 </div>
               )}
               <div className="form-actions">
-                <button type="submit" className="btn btn-primary">Save</button>
+                <button type="submit" className="btn btn-primary" disabled={saving}>
+                  {saving && <span className="loading-spinner" />}{saving ? 'Saving...' : 'Save'}
+                </button>
                 <button type="button" className="btn btn-secondary" onClick={() => setModal(null)}>Cancel</button>
               </div>
             </form>
