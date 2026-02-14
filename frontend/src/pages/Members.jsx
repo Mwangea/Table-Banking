@@ -36,6 +36,9 @@ export default function Members() {
   const [modal, setModal] = useState(null);
   const [deleteTarget, setDeleteTarget] = useState(null);
   const [deleting, setDeleting] = useState(false);
+  const [confirmClearAll, setConfirmClearAll] = useState(false);
+  const [clearingAll, setClearingAll] = useState(false);
+  const [showClearAllModal, setShowClearAllModal] = useState(false);
   const [form, setForm] = useState({ full_name: '', phone: '', national_id: '', date_joined: '', status: 'Active', record_reg_fee: false });
   const [settings, setSettings] = useState({});
   const [page, setPage] = useState(1);
@@ -86,6 +89,21 @@ export default function Members() {
     }
   };
 
+  const handleClearAll = async () => {
+    setClearingAll(true);
+    try {
+      await api.members.clearAll();
+      setShowClearAllModal(false);
+      setConfirmClearAll(false);
+      load();
+      toast.success('All members cleared');
+    } catch (err) {
+      toast.error(err.message);
+    } finally {
+      setClearingAll(false);
+    }
+  };
+
   const handleSubmit = async (e) => {
     e.preventDefault();
     setSaving(true);
@@ -119,6 +137,24 @@ export default function Members() {
           {isAdmin && <button type="button" className="btn btn-primary" onClick={openAdd}>Add Member</button>}
         </div>
       </div>
+
+      {isAdmin && members.length > 0 && (
+        <div className="card" style={{ marginBottom: '1rem' }}>
+          <label style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', cursor: 'pointer' }}>
+            <input type="checkbox" checked={confirmClearAll} onChange={e => setConfirmClearAll(e.target.checked)} />
+            I understand this will permanently delete all members and their contributions, loans, registration fees, and fines
+          </label>
+          <button
+            type="button"
+            className="btn btn-danger"
+            style={{ marginTop: '0.75rem' }}
+            disabled={!confirmClearAll}
+            onClick={() => setShowClearAllModal(true)}
+          >
+            Clear All Members
+          </button>
+        </div>
+      )}
 
       <div className="card">
         <div className="form-group" style={{ marginBottom: '1rem', maxWidth: 320 }}>
@@ -259,6 +295,16 @@ export default function Members() {
           onConfirm={handleDelete}
           onCancel={() => setDeleteTarget(null)}
           loading={deleting}
+        />
+      )}
+
+      {showClearAllModal && (
+        <DeleteModal
+          title="Clear All Members"
+          message="Are you sure you want to delete all members? This will permanently remove all members and their contributions, loans, registration fees, and fines. This cannot be undone."
+          onConfirm={handleClearAll}
+          onCancel={() => setShowClearAllModal(false)}
+          loading={clearingAll}
         />
       )}
     </div>

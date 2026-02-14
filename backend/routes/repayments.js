@@ -1,6 +1,7 @@
 import express from 'express';
 import pool from '../db/connection.js';
 import { authenticate } from '../middleware/auth.js';
+import { calculateReducingBalance } from '../utils/reducingBalance.js';
 
 const router = express.Router();
 
@@ -25,20 +26,20 @@ router.post('/', authenticate, async (req, res) => {
     if (!loan_id || !amount_paid || !payment_date) {
       return res.status(400).json({ error: 'loan_id, amount_paid, payment_date are required' });
     }
-    const [loan] = await pool.query('SELECT total_amount FROM loans WHERE id = ?', [loan_id]);
-    if (loan.length === 0) return res.status(404).json({ error: 'Loan not found' });
-    const [rep] = await pool.query('SELECT COALESCE(SUM(amount_paid), 0) as total_paid FROM repayments WHERE loan_id = ?', [loan_id]);
-    const totalPaid = parseFloat(rep[0].total_paid);
-    const totalAmount = parseFloat(loan[0].total_amount);
+    const [loanRows] = await pool.query('SELECT * FROM loans WHERE id = ?', [loan_id]);
+    if (loanRows.length === 0) return res.status(404).json({ error: 'Loan not found' });
+    const [reps] = await pool.query('SELECT amount_paid, payment_date FROM repayments WHERE loan_id = ? ORDER BY payment_date', [loan_id]);
+    const calc = calculateReducingBalance(loanRows[0], reps);
     const amount = parseFloat(amount_paid);
-    if (totalPaid + amount > totalAmount) return res.status(400).json({ error: 'Payment exceeds loan balance' });
+    if (amount > calc.balance) return res.status(400).json({ error: `Payment exceeds loan balance (${calc.balance.toFixed(2)})` });
 
     const [result] = await pool.query(
       'INSERT INTO repayments (loan_id, amount_paid, payment_date, recorded_by) VALUES (?, ?, ?, ?)',
       [loan_id, amount, payment_date, req.user.id]
     );
-    const newTotal = totalPaid + amount;
-    const newStatus = newTotal >= totalAmount ? 'Completed' : 'Ongoing';
+    const afterRepayments = [...reps, { amount_paid: amount, payment_date }];
+    const afterCalc = calculateReducingBalance(loanRows[0], afterRepayments);
+    const newStatus = afterCalc.balance <= 0 ? 'Completed' : 'Ongoing';
     await pool.query('UPDATE loans SET status = ? WHERE id = ?', [newStatus, loan_id]);
     res.status(201).json({ id: result.insertId, loan_id, amount_paid: amount, payment_date, recorded_by: req.user.id });
   } catch (err) {

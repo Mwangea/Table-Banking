@@ -60,6 +60,15 @@ router.put('/:id', authenticate, requireAdmin, async (req, res) => {
   }
 });
 
+router.delete('/clear-all', authenticate, requireAdmin, async (req, res) => {
+  try {
+    const [result] = await pool.query('DELETE FROM members');
+    res.json({ message: `${result.affectedRows} member(s) deleted` });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
 router.delete('/:id', authenticate, requireAdmin, async (req, res) => {
   try {
     const [result] = await pool.query('DELETE FROM members WHERE id = ?', [req.params.id]);

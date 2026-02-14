@@ -1,6 +1,7 @@
 import express from 'express';
 import pool from '../db/connection.js';
 import { authenticate, requireAdmin } from '../middleware/auth.js';
+import { calculateReducingBalance } from '../utils/reducingBalance.js';
 
 const router = express.Router();
 
@@ -15,10 +16,9 @@ router.get('/', authenticate, async (req, res) => {
     sql += ' ORDER BY l.issue_date DESC';
     const [rows] = await pool.query(sql, params);
     const loansWithBalance = await Promise.all(rows.map(async (loan) => {
-      const [rep] = await pool.query('SELECT COALESCE(SUM(amount_paid), 0) as total_paid FROM repayments WHERE loan_id = ?', [loan.id]);
-      const totalPaid = parseFloat(rep[0].total_paid);
-      const balance = parseFloat(loan.total_amount) - totalPaid;
-      return { ...loan, total_paid: totalPaid, balance };
+      const [reps] = await pool.query('SELECT amount_paid, payment_date FROM repayments WHERE loan_id = ? ORDER BY payment_date', [loan.id]);
+      const calc = calculateReducingBalance(loan, reps);
+      return { ...loan, interest_amount: calc.total_interest, total_amount: calc.total_amount, total_paid: calc.total_paid, balance: calc.balance };
     }));
     res.json(loansWithBalance);
   } catch (err) {
@@ -33,8 +33,9 @@ router.get('/:id', authenticate, async (req, res) => {
       [req.params.id]
     );
     if (loans.length === 0) return res.status(404).json({ error: 'Loan not found' });
-    const [rep] = await pool.query('SELECT COALESCE(SUM(amount_paid), 0) as total_paid FROM repayments WHERE loan_id = ?', [req.params.id]);
-    const loan = { ...loans[0], total_paid: parseFloat(rep[0].total_paid), balance: parseFloat(loans[0].total_amount) - parseFloat(rep[0].total_paid) };
+    const [reps] = await pool.query('SELECT amount_paid, payment_date FROM repayments WHERE loan_id = ? ORDER BY payment_date', [req.params.id]);
+    const calc = calculateReducingBalance(loans[0], reps);
+    const loan = { ...loans[0], interest_amount: calc.total_interest, total_amount: calc.total_amount, total_paid: calc.total_paid, balance: calc.balance };
     res.json(loan);
   } catch (err) {
     res.status(500).json({ error: err.message });
@@ -70,13 +71,12 @@ router.post('/', authenticate, requireAdmin, async (req, res) => {
     const totalExpenses = parseFloat(expTotal?.total || 0);
     const totalRegFees = parseFloat(regTotal?.total || 0);
     const totalFinesPaid = parseFloat(finesTotal?.total || 0);
-    const [activeLoans] = await pool.query(`
-      SELECT l.id, l.total_amount, COALESCE((SELECT SUM(amount_paid) FROM repayments WHERE loan_id = l.id), 0) as total_paid
-      FROM loans l WHERE l.status IN ('Ongoing', 'Defaulted', 'Pending')
-    `);
+    const [activeLoans] = await pool.query(`SELECT * FROM loans l WHERE l.status IN ('Ongoing', 'Defaulted', 'Pending')`);
     let outstandingBalance = 0;
-    for (const row of activeLoans) {
-      outstandingBalance += parseFloat(row.total_amount) - parseFloat(row.total_paid);
+    for (const loan of activeLoans) {
+      const [reps] = await pool.query('SELECT amount_paid, payment_date FROM repayments WHERE loan_id = ? ORDER BY payment_date', [loan.id]);
+      const calc = calculateReducingBalance(loan, reps);
+      outstandingBalance += calc.balance;
     }
     const poolTotal = totalContributions + totalRepaid + totalExternal + totalRegFees + totalFinesPaid - totalPrincipalLent - totalExpenses;
     const availableCash = poolTotal - outstandingBalance;
@@ -93,21 +93,18 @@ router.post('/', authenticate, requireAdmin, async (req, res) => {
       return res.status(400).json({ error: `Insufficient group funds. Available cash: ${availableCash.toFixed(2)}. The group can only lend from pooled contributions minus outstanding loans.` });
     }
 
-    const rate = parseFloat(interest_rate) / 100;
-    const interestAmount = loanAmount * rate;
-    const totalAmount = loanAmount + interestAmount;
-
+    // Reducing balance: interest on outstanding balance. Interest accrued dynamically as repayments reduce balance.
     const [result] = await pool.query(
       'INSERT INTO loans (member_id, loan_amount, interest_rate, interest_amount, total_amount, issue_date, due_date, status, approved_by) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)',
-      [member_id, loanAmount, interest_rate, interestAmount, totalAmount, issue_date, due_date, 'Ongoing', req.user.id]
+      [member_id, loanAmount, interest_rate, 0, loanAmount, issue_date, due_date, 'Ongoing', req.user.id]
     );
     res.status(201).json({
       id: result.insertId,
       member_id,
       loan_amount: loanAmount,
       interest_rate,
-      interest_amount: interestAmount,
-      total_amount: totalAmount,
+      interest_amount: 0,
+      total_amount: loanAmount,
       issue_date,
       due_date,
       status: 'Ongoing'
@@ -145,24 +142,23 @@ router.put('/:id', authenticate, requireAdmin, async (req, res) => {
     const [member] = await pool.query('SELECT status FROM members WHERE id = ?', [member_id]);
     if (member.length === 0) return res.status(404).json({ error: 'Member not found' });
     const loanAmount = parseFloat(loan_amount);
-    const rate = parseFloat(interest_rate) / 100;
-    const interestAmount = loanAmount * rate;
-    const totalAmount = loanAmount + interestAmount;
-    const [rep] = await pool.query('SELECT COALESCE(SUM(amount_paid), 0) as total_paid FROM repayments WHERE loan_id = ?', [req.params.id]);
-    const totalPaid = parseFloat(rep[0].total_paid);
-    if (totalAmount < totalPaid) {
-      return res.status(400).json({ error: `Total amount cannot be less than amount already repaid (${totalPaid.toFixed(2)})` });
+    const updatedLoan = { ...existing[0], loan_amount: loanAmount, interest_rate: parseFloat(interest_rate), issue_date };
+    const [reps] = await pool.query('SELECT amount_paid, payment_date FROM repayments WHERE loan_id = ? ORDER BY payment_date', [req.params.id]);
+    const putCalc = calculateReducingBalance(updatedLoan, reps);
+    if (putCalc.balance < 0) {
+      return res.status(400).json({ error: `Amount already repaid (${putCalc.total_paid.toFixed(2)}) exceeds new loan total` });
     }
     await pool.query(
       'UPDATE loans SET member_id = ?, loan_amount = ?, interest_rate = ?, interest_amount = ?, total_amount = ?, issue_date = ?, due_date = ? WHERE id = ?',
-      [member_id, loanAmount, interest_rate, interestAmount, totalAmount, issue_date, due_date, req.params.id]
+      [member_id, loanAmount, interest_rate, putCalc.total_interest, putCalc.total_amount, issue_date, due_date, req.params.id]
     );
     const [loans] = await pool.query(
       'SELECT l.*, m.full_name as member_name FROM loans l JOIN members m ON l.member_id = m.id WHERE l.id = ?',
       [req.params.id]
     );
-    const [rep2] = await pool.query('SELECT COALESCE(SUM(amount_paid), 0) as total_paid FROM repayments WHERE loan_id = ?', [req.params.id]);
-    const row = { ...loans[0], total_paid: parseFloat(rep2[0].total_paid), balance: parseFloat(loans[0].total_amount) - parseFloat(rep2[0].total_paid) };
+    const [reps2] = await pool.query('SELECT amount_paid, payment_date FROM repayments WHERE loan_id = ? ORDER BY payment_date', [req.params.id]);
+    const getCalc = calculateReducingBalance(loans[0], reps2);
+    const row = { ...loans[0], interest_amount: getCalc.total_interest, total_amount: getCalc.total_amount, total_paid: getCalc.total_paid, balance: getCalc.balance };
     res.json(row);
   } catch (err) {
     res.status(500).json({ error: err.message });

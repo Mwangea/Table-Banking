@@ -21,7 +21,8 @@ export const api = {
     get: (id) => request(`/members/${id}`),
     create: (body) => request('/members', { method: 'POST', body: JSON.stringify(body) }),
     update: (id, body) => request(`/members/${id}`, { method: 'PUT', body: JSON.stringify(body) }),
-    delete: (id) => request(`/members/${id}`, { method: 'DELETE' })
+    delete: (id) => request(`/members/${id}`, { method: 'DELETE' }),
+    clearAll: () => request('/members/clear-all', { method: 'DELETE' })
   },
   contributions: {
     list: (params) => request('/contributions' + (params ? '?' + new URLSearchParams(params).toString() : '')),
